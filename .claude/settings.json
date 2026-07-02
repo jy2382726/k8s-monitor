@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__muyu-search__plan_intent",
+      "mcp__muyu-search__plan_complexity",
+      "mcp__muyu-search__plan_sub_query",
+      "mcp__muyu-search__plan_search_term",
+      "mcp__muyu-search__plan_tool_mapping",
+      "mcp__muyu-search__plan_execution",
+      "mcp__muyu-search__web_search",
+      "mcp__muyu-search__web_fetch",
+      "mcp__muyu-search__web_map",
+      "mcp__muyu-search__get_sources",
+      "mcp__muyu-search__get_config_info",
+      "mcp__web-search-prime__web_search_prime",
+      "mcp__web-reader__webReader",
+      "Write(*)",
+      "Read(*)"
+    ]
+  }
+}

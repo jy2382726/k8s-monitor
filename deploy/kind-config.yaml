@@ -1,0 +1,85 @@
+# kind 集群配置
+# 文档: https://kind.sigs.k8s.io/docs/user/configuration/
+
+apiVersion: kind.x-k8s.io/v1alpha4     # kind API 版本
+kind: Cluster                          # 这个 yaml 定义一个"集群"
+
+# nodes: 节点列表（每个节点 = 一个 Docker 容器）
+nodes:
+  # 第 1 个节点: control-plane（控制平面）
+  - role: control-plane
+    image: kindest/node:v1.31.14        # 节点镜像（含 kubelet/kubeadm/kube-proxy 等）
+    labels:
+      role: control-plane
+      workload: system
+      ingress-ready: "true"             # ★ ingress-nginx 会用 nodeSelector 匹配这个标签
+    # extraPortMappings: 把宿主机端口映射到节点端口
+    # WSL2 mirrored 模式下，Windows 浏览器 localhost:port 直达
+    extraPortMappings:
+      - containerPort: 80               # 节点内 80 端口
+        hostPort: 80                    # 映射到 WSL 主机 80 端口
+        protocol: TCP
+      - containerPort: 443              # HTTPS 端口
+        hostPort: 443
+        protocol: TCP
+      - containerPort: 30080            # ArgoCD NodePort
+        hostPort: 30080
+        protocol: TCP
+      - containerPort: 30090            # Prometheus NodePort
+        hostPort: 30090
+        protocol: TCP
+      - containerPort: 30030            # Grafana NodePort
+        hostPort: 30030
+        protocol: TCP
+    # ★ 镜像加速 + 代理修复（详见文件底部 containerdConfigPatches 说明），每个节点都要挂
+    extraMounts:
+      - hostPath: /root/projects/k8s-monitor/deploy/containerd-certs.d
+        containerPath: /etc/containerd/certs.d
+        readOnly: true
+      - hostPath: /root/projects/k8s-monitor/deploy/containerd-no-proxy.conf
+        containerPath: /etc/systemd/system/containerd.service.d/zz-no-proxy.conf
+        readOnly: true
+
+  # 第 2 个节点: worker
+  - role: worker
+    image: kindest/node:v1.31.14
+    labels:
+      role: worker
+      workload: general
+      topology.kubernetes.io/zone: zone-a    # ★ 模拟"可用区 A"，测拓扑分布用
+    extraMounts:
+      - hostPath: /root/projects/k8s-monitor/deploy/containerd-certs.d
+        containerPath: /etc/containerd/certs.d
+        readOnly: true
+      - hostPath: /root/projects/k8s-monitor/deploy/containerd-no-proxy.conf
+        containerPath: /etc/systemd/system/containerd.service.d/zz-no-proxy.conf
+        readOnly: true
+
+  # 第 3 个节点: worker
+  - role: worker
+    image: kindest/node:v1.31.14
+    labels:
+      role: worker
+      workload: general
+      topology.kubernetes.io/zone: zone-b    # ★ 模拟"可用区 B"
+    extraMounts:
+      - hostPath: /root/projects/k8s-monitor/deploy/containerd-certs.d
+        containerPath: /etc/containerd/certs.d
+        readOnly: true
+      - hostPath: /root/projects/k8s-monitor/deploy/containerd-no-proxy.conf
+        containerPath: /etc/systemd/system/containerd.service.d/zz-no-proxy.conf
+        readOnly: true
+
+# containerdConfigPatches: 修改 kind 节点内部 containerd 的配置
+# ★★★ 关键修复（原配置用旧的 registry.mirrors 写法，是建集群失败的根因）★★★
+# 节点镜像 kindest/node:v1.31.14 内置 containerd v2.2，它已废弃 registry.mirrors 写法。
+# 旧写法会触发: "invalid cri image config: `mirrors` cannot be set when `config_path` is provided"
+#   -> CRI 插件加载失败 -> kubelet 连不上 CRI (unknown service runtime.v1.RuntimeService)
+#   -> kubelet 崩溃循环 -> kubeadm 等不到 kubelet -> 报 "kubelet not healthy / 10248 connection refused"。
+# 正确做法: 只声明 config_path 指向一个目录，在该目录下放每个 registry 的 hosts.toml。
+# 那些 hosts.toml 文件位于 deploy/containerd-certs.d/，通过上面每个节点的 extraMounts
+# 挂到 /etc/containerd/certs.d。镜像加速走 daocloud 国内源。
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"

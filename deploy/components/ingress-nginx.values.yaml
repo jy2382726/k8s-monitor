@@ -1,0 +1,33 @@
+# ingress-nginx Helm chart values
+# 文档: https://kubernetes.github.io/ingress-nginx/
+# kind 特殊配置: hostNetwork + 调度到 control-plane（带 ingress-ready 标签）
+
+controller:
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  kind: Deployment
+  replicaCount: 1
+
+  # 调度到带 ingress-ready=true 标签的节点（即 control-plane）
+  nodeSelector:
+    ingress-ready: "true"
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Equal
+      effect: NoSchedule
+
+  # 关闭 admission webhooks（开发环境简化）
+  admissionWebhooks:
+    enabled: false
+
+  # 不需要 Service，hostNetwork 直接绑节点端口
+  service:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 90Mi
+
+defaultBackend:
+  enabled: false

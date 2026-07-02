@@ -1,0 +1,64 @@
+# ============================================================
+# .gitignore — k8s-monitor
+# 本地 Kubernetes 监控 / 部署项目（IaC + 文档，无应用代码）
+# ============================================================
+
+# ---- 敏感信息 / 密钥（切勿提交）-------------------------------
+# .mcp.json 含真实 API key（muyu / tavily / firecrawl），默认不跟踪。
+# 若团队需共享 MCP 配置，请新建 .mcp.json.example（占位密钥）并提交它。
+.mcp.json
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+*_secret.yaml
+secret-*.yaml
+
+# K8s / kubectl 凭据
+kubeconfig
+*.kubeconfig
+admin.conf
+
+# ---- K8s / 容器运行时产物 ------------------------------------
+# kind 本地集群日志与状态
+kind-*.log
+*.cluster
+# helm chart 下载缓存 / 解包
+*.tgz
+charts/
+
+# 部署脚本产生的运行时产物（保留目录结构，仅忽略内容）
+deploy/backup/*
+deploy/uninstall/*
+deploy/verify/*
+!**/.gitkeep
+
+# ---- 日志 / 临时 / 备份 ---------------------------------------
+*.log
+*.bak
+*.tmp
+*.swp
+*.swo
+*~
+
+# ---- 操作系统 ------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 编辑器 / IDE --------------------------------------------
+.vscode/
+.idea/
+*.iml
+*.sublime-*
+
+# ---- Claude Code 状态 ----------------------------------------
+# 通用方法论 skill 工具箱：与本项目业务无关，仅本地使用，不跟踪
+.claude/skills/
+# 本机个人状态
+.claude/settings.local.json
+.claude/projects/
+.claude/statsig/
+.claude/todos/

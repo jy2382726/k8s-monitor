@@ -1,0 +1,30 @@
+# cert-manager Helm chart values
+# 文档: https://cert-manager.io/docs/installation/helm/
+
+installCRDs: true
+
+global:
+  leaderElection:
+    namespace: cert-manager
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 100Mi
+
+# 仅本地开发：使用 self-signed issuer（无需 Let's Encrypt）
+# ClusterIssuer 在 Task 5.4 单独 apply
+
+webhook:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 50Mi
+
+cainjector:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 50Mi

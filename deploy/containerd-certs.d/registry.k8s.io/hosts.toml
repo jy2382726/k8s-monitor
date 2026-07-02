@@ -1,0 +1,4 @@
+server = "https://registry.k8s.io"
+
+[host."https://m.daocloud.io/registry.k8s.io"]
+  capabilities = ["pull", "resolve"]

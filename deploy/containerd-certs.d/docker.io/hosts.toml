@@ -1,0 +1,12 @@
+# containerd v2 镜像加速配置 (certs.d / hosts.toml 方式)
+# 对应 deploy/kind-config.yaml 里 containerdConfigPatches 的 config_path
+# 注意: containerd v2 (kind v1.31 节点镜像内置 v2.2) 已废弃旧的 registry.mirrors 写法,
+# 必须改用 config_path + hosts.toml, 否则 CRI 插件加载失败 -> kubelet 起不来 -> 建集群失败.
+
+server = "https://registry-1.docker.io"
+
+[host."https://docker.m.daocloud.io"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://docker.1ms.run"]
+  capabilities = ["pull", "resolve"]

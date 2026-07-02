@@ -1,0 +1,55 @@
+# ArgoCD Helm chart values
+# 文档: https://github.com/argoproj/argo-helm/tree/main/charts/argo-cd
+
+server:
+  service:
+    type: NodePort
+    nodePort: 30080
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - host: argocd.local
+        paths:
+          - path: /
+            pathType: Prefix
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+configs:
+  cm:
+    application.instanceLabelKey: argocd.argoproj.io/instance
+  # 开发环境：关闭双因素认证、使用 admin/admin123
+  secret:
+    argocdServerAdminPassword: "$2a$10$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    # 占位符，Task 5.6 用 argocd account generate-password 重生成
+
+controller:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+repoServer:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+applicationSet:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+notifications:
+  enabled: false                        # 开发环境关闭
+
+redis:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi

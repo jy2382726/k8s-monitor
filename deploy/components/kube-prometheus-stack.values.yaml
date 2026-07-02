@@ -1,0 +1,53 @@
+# kube-prometheus-stack Helm chart values
+# 文档: https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+
+# 关闭 alertmanager（开发环境）
+alertmanager:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+    # 启用 ServiceMonitor 自动发现
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 100Mi
+
+grafana:
+  adminPassword: "admin123"           # ★ 仅开发环境，生产请改
+  service:
+    type: NodePort
+    nodePort: 30030
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: local-path
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+nodeExporter:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+
+kubeStateMetrics:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi

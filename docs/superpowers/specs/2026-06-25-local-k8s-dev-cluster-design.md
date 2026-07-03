@@ -7,6 +7,16 @@
 
 ---
 
+> ⚠️ **重要更新（2026-07-03）—— 镜像预灌方式已变更，以 `docs/12-local-registry镜像预灌方案.md` 为准**
+>
+> 本设计稿编写时（2026-06-25）镜像预灌用 `kind load docker-image`（见 §2.4 防线4、§4.3）。**实测在本机 100% 失败**：根因是 `docker save` 多平台 index 不自洽 + `ctr import --all-platforms` → `content digest not found`（完整排查见 `docs/12` 附录 A）。
+>
+> **现已改用方案 C（本地 registry mirror）**：起 `registry:3` 容器，宿主 `imagetools create` 为主（保留多平台 list digest）/ 节点经 `hosts.toml` mirror `pull`，彻底绕开 `docker save` 链路。ingress-nginx 实战另踩出 chart digest pin 盲区，预灌已统一 imagetools 为主（见 `docs/12` §B.4）。
+>
+> **正文 §2.4 防线4、§4.3、镜像加速/预拉取表保留原 kind load 描述作历史参考，已过时**——实施以 `docs/12` + plan 各 Task 顶部覆盖说明为准。
+
+---
+
 ## 0. 概述
 
 ### 0.1 项目目标

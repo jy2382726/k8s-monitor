@@ -1045,6 +1045,7 @@ $ for f in *.yaml; do
 > 实际脚本已在仓库 `deploy/preload-images.sh`：pull + **`docker buildx imagetools create` 为主**（保留多平台 list digest，chart 以 `tag@sha256:<list digest>` pin 时才能命中）+ `docker push` 兜底。
 > 另需配套：`deploy/local-registry.sh`（registry 容器 up/down/status）、`deploy/containerd-certs.d/localhost:5001/hosts.toml`（自研镜像留路）、4 个上游 `hosts.toml` 加 `kind-registry:5000` 首 host。
 > 完整改动清单按 `docs/12` §7。
+> ⚠️ 下面旧脚本里的 `IMAGES` 数组也以仓库实际脚本为准（实际已移除 `kindest/node`，各组件 tag 也已更新）；此处保留的是 2026-06-25 初版，仅供理解原 kind load 方案。
 
 **完成标志**: `deploy/preload-images.sh` 文件存在、可执行。
 

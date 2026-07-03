@@ -23,7 +23,8 @@
 >
 > - 📖 **原方案**：`docker pull` 镜像到宿主 → `kind load docker-image` 灌进 kind 节点 containerd。
 > - ⚠️ **为什么失败**：`kind load` 内部用 `docker save | ctr import --all-platforms`；本机 `docker save` 输出的 tar 包**多平台 index 不自洽**（顶层列 17 平台、blob 只够 amd64），节点取不到非 amd64 平台 manifest → `content digest not found`，100% 失败。
-> - 💡 **新方案 C**：起本地 `registry:3` 容器，宿主 `docker push` 进去，节点 containerd 经 `hosts.toml` mirror `pull`，**彻底绕开 `docker save`**。实测 Pod 799ms 命中。
+> - 💡 **新方案 C**：起本地 `registry:3` 容器，宿主以 `imagetools create` 为主推完整多平台 manifest list 进去（保留 list digest，chart 以 `tag@digest` pin 才能命中）/ `docker push` 兜底，节点 containerd 经 `hosts.toml` mirror `pull`，**彻底绕开 `docker save`**。实测 Pod 799ms 命中。
+> - ⚠️ **digest pin 盲区**（2026-07-03 ingress-nginx 实战踩出）：chart 常以 `tag@sha256:<多平台 list digest>` pin 镜像，`docker push` 只推单平台 manifest（digest 不同）→ containerd 按 digest 取不到 → mirror 404 回源。故预灌统一改 `imagetools create` 为主。三坑（chart 版本同步 / digest 不匹配 / hostNetwork 端口死锁）详见 `docs/12` §B.4。
 > - 🔗 **下面 Task 3.3/4.1/5.1 Step4 的旧内容仅作"理解 kind load 原理"的教学保留**，实操按 `docs/12`。
 
 ---
@@ -1161,6 +1162,9 @@ LOAD_LOG="/tmp/k8s-monitor-load.log"       # kind load 日志路径
 # 注释按组件分组，便于维护
 IMAGES=(
   # === kind 节点镜像 ===
+  # ⚠️ 实际 preload-images.sh 已移除 kindest/node（教学版保留供讲解）。
+  # 原因：kindest/node 是 kind 节点本身镜像，建集群时节点内 containerd 早已具备，
+  # 无任何 Pod 引用它，推 registry 白费 ~1.42GB。
   "kindest/node:v1.31.14"                   # K8s 节点（含 kubelet/kubeadm 等）
 
   # === metrics-server ===
@@ -1289,7 +1293,7 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
 >
 > | 阶段 | 动作 | 镜像存哪 |
 > |---|---|---|
-> | 预灌 | 宿主 `docker pull` → `docker push localhost:5001/<path>` | local registry 容器（宿主 docker 卷）|
+> | 预灌 | 宿主 `docker pull` → `imagetools create` 为主推 `localhost:5001/<path>`（docker push 兜底）| local registry 容器（宿主 docker 卷）|
 > | 运行时 | 节点 containerd 经 `hosts.toml` mirror `pull` | 节点容器内 `/var/lib/containerd/` |
 >
 > 💡 **为什么 push 要去 registry 前缀**:
@@ -1312,7 +1316,7 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
 > 💡 **为什么不再用 kind load**:
 > - kind load 内部走 `docker save | ctr import --all-platforms`
 > - 本机 `docker save` 输出多平台 index 不自洽（详见 `docs/12` 附录 A）→ 100% 失败
-> - 方案 C 用 `docker push`（只推当前平台）+ registry，从机制上绕开
+> - 方案 C 用 `imagetools create` 为主（拷贝完整多平台 list，digest 与 chart pin 一致）+ registry，从机制上绕开
 >
 > 💡 **为什么要包一层 `pull_with_retry`**:
 > - 代理 (127.0.0.1:7890) 偶发 `connection reset by peer` / `unexpected EOF`

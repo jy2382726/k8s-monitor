@@ -4,11 +4,19 @@
 
 **Goal:** 在 WSL2 内通过 kind 部署一套 3 节点 Kubernetes 1.31 开发测试集群，预装 6 个核心组件（metrics-server / ingress-nginx / cert-manager / kube-prometheus-stack / ArgoCD / local-path-provisioner），并提供完整的验证、回滚、清理方案。
 
-**Architecture:** 单 kind 集群（1 control-plane + 2 worker），节点为 Docker 容器，使用 kindnetd CNI、local-path-provisioner 存储、ingress-nginx hostNetwork 入口。镜像加速四道防线：①宿主机 Docker daemon 走 Clash 代理（7890）把镜像拉到本地；②kind 节点内 containerd 经 m.daocloud.io 反代拉镜像——**containerd v2 已废弃 `registry.mirrors`，必须用 `config_path` + certs.d/hosts.toml 写法**（见 Task 3.1）；③节点内 containerd 用 `NO_PROXY=*` 绕过"从宿主机透传进来但在容器内不可达的 127.0.0.1:7890 代理"（见 Task 3.1，否则任何拉镜像都报 `proxyconnect refused`）；④`kind load` 把本地镜像灌入节点。
+**Architecture:** 单 kind 集群（1 control-plane + 2 worker），节点为 Docker 容器，使用 kindnetd CNI、local-path-provisioner 存储、ingress-nginx hostNetwork 入口。镜像加速四道防线：①宿主机 Docker daemon 走 Clash 代理（7890）把镜像拉到本地；②kind 节点内 containerd 经 m.daocloud.io 反代拉镜像——**containerd v2 已废弃 `registry.mirrors`，必须用 `config_path` + certs.d/hosts.toml 写法**（见 Task 3.1）；③节点内 containerd 用 `NO_PROXY=*` 绕过"从宿主机透传进来但在容器内不可达的 127.0.0.1:7890 代理"（见 Task 3.1，否则任何拉镜像都报 `proxyconnect refused`）；④~~`kind load` 把本地镜像灌入节点~~（**已废弃**，本机会因 `docker save` 多平台 index 畸变 100% 失败）；**改用 local registry mirror**——起 `registry:3` 容器，宿主 push / 节点经 `hosts.toml` mirror pull，详见 `docs/12`。
 
 **Tech Stack:** WSL2 + systemd, Docker 29.2.1, kind v0.32.0, Kubernetes v1.31.14, Helm v4.2.2, Clash（HTTP proxy 7890）。容器运行时两套：宿主机 containerd v2.2.x（随 Docker 安装，daemon 拉镜像用）；kind 节点内 containerd v2.2.0（随 kindest/node:v1.31.14，Pod 拉镜像用，**v2 必须用 config_path/certs.d，旧的 registry.mirrors 已失效**）。
 
 **对应设计稿:** `docs/superpowers/specs/2026-06-25-local-k8s-dev-cluster-design.md`
+
+> ⚠️ **重要更新（2026-07-03）——镜像预灌方式已变更，以 `docs/12-local-registry镜像预灌方案.md` 为准**
+>
+> 本手册编写时（2026-06-25）镜像预灌用 `kind load docker-image`。**实测在本机该方式 100% 失败**：根因是本机 `docker save` 输出的多平台 index 不自洽 + `ctr import --all-platforms` → `content digest not found`（完整排查见 `docs/12` 附录 A）。
+>
+> **现已改用方案 C（本地 registry mirror）**：起一个 `registry:3` 容器，宿主 `docker push` / 节点 containerd 经 `hosts.toml` mirror `pull`，彻底绕开 `docker save` 链路。实测 Pod 799ms 命中本地 registry。
+>
+> **执行本手册时**：镜像预灌相关步骤（Task 3.3 / 4.1 / 5.1 Step4）按 `docs/12` 执行；本文这些 Task 仍保留旧 `kind load` 描述供历史参考，但**已过时**——以各 Task 顶部的覆盖说明为准。
 
 ---
 
@@ -1033,6 +1041,11 @@ $ for f in *.yaml; do
 
 ### Task 3.3: 编写镜像预拉取脚本
 
+> ⚠️ **本 Task 已被 `docs/12` 方案 C 取代（保留以下旧内容仅供历史参考）**。
+> 实际脚本已在仓库 `deploy/preload-images.sh`：pull + **去前缀 push 到 `localhost:5001`** + `docker buildx imagetools create` 兜底（cert-manager 类存储畸变）。
+> 另需配套：`deploy/local-registry.sh`（registry 容器 up/down/status）、`deploy/containerd-certs.d/localhost:5001/hosts.toml`（自研镜像留路）、4 个上游 `hosts.toml` 加 `kind-registry:5000` 首 host。
+> 完整改动清单按 `docs/12` §7。
+
 **完成标志**: `deploy/preload-images.sh` 文件存在、可执行。
 
 **Files:**
@@ -1189,6 +1202,13 @@ $ bash -n /root/projects/k8s-monitor/deploy/preload-images.sh && echo "Syntax OK
 
 ### Task 4.1: 执行镜像预拉取
 
+> ⚠️ **本 Task 按 `docs/12` 方案 C 执行（替代下面的 Step 1-2）**：
+> 1. `./deploy/local-registry.sh up`（起 registry + 接入 kind 网络）
+> 2. `./deploy/preload-images.sh`（pull + 去**前缀** push 到 `localhost:5001`，cert-manager 类自动走 imagetools）
+> 3. 验证：`curl -s http://localhost:5001/v2/_catalog` 应有 18 个 repo（去前缀名，如 `metrics-server/metrics-server`）
+>
+> 下面 Step 1-2 的命令仍可跑（脚本路径未变），但脚本行为已是 push 到 registry，不再是 `kind load`。详见 `docs/12` §10/§11。
+
 **完成标志**: 镜像清单中 95%+ 镜像成功拉取（个别失败可在集群部署阶段补救）。
 
 **Files:** 无（执行已有脚本）
@@ -1299,12 +1319,14 @@ k8s-monitor-dev-worker                Ready    <none>          1m    v1.31.14  1
 k8s-monitor-dev-worker2               Ready    <none>          1m    v1.31.14  172.x.0.x     ...
 ```
 
-- [ ] **Step 4: 灌入预拉取镜像到 kind 节点**
+- [ ] **Step 4: 确认 local registry 就绪（无需"灌入节点"）**
+
+> ⚠️ **方案 C 下无需灌入**（已取代旧 `kind load` 步骤）。镜像已在 local registry（Task 4.1 push 的），节点 containerd 经 `hosts.toml` mirror 自动从 `kind-registry:5000` 拉。
+> 前提：`local-registry.sh up` 已执行 + 4 个上游 `hosts.toml` 已加 `kind-registry:5000` 首 host（见 `docs/12` §7.2(b)）。
 
 ```bash
-$ cd /root/projects/k8s-monitor
-$ ./deploy/preload-images.sh
-# （脚本会自动检测集群已存在，执行 kind load 部分）
+$ ./deploy/local-registry.sh status    # registry running + 已接 kind 网
+$ curl -s http://localhost:5001/v2/_catalog | head   # 18 个 repo 就绪
 ```
 
 - [ ] **Step 5: 验证 default namespace 干净**

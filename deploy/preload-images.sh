@@ -111,15 +111,21 @@ for img in "${IMAGES[@]}"; do
   # 否则 registry 里存的 repo 路径与 containerd mirror 请求路径不匹配 → 404。
   path="${img#*/}"
   echo "[push] $img → $REGISTRY/$path"
-  if docker tag "$img" "$REGISTRY/$path" \
-     && docker push "$REGISTRY/$path" >> "$LOAD_LOG" 2>&1; then
-    echo "  ✓ done"
+  # ★ 以 imagetools create 为主（不是兜底）：helm chart 常以 tag@sha256:<list digest> pin
+  # 镜像（如 ingress-nginx controller v1.15.1 pin 594ceea…）。docker push 只推本机已拉的
+  # 单平台 manifest（digest 不同，如 de8fd8f1…），containerd 按 digest 取 manifest 时
+  # registry 里没有那个 list digest → 404 → 回源上游。imagetools create 直接在上游 registry
+  # 与 local registry 间拷贝完整多平台 manifest list，list digest 与 chart pin 完全一致，
+  # 且顺带绕过本机 docker 存储畸变（多平台 index 不自洽，见 docs/12 附录 A）。
+  # docker push 仅作兜底：imagetools 因代理抖动/上游不可达失败时，若 chart 不 pin digest，
+  # 单平台 manifest 也能用。（详见 docs/12 附录 B.4）
+  if docker buildx imagetools create -t "$REGISTRY/$path" "$img" >> "$LOAD_LOG" 2>&1; then
+    echo "  ✓ done (imagetools)"
   else
-    # 兜底：本机 docker 存储畸变（多平台 index 无平台 manifest）时 push 报
-    # "does not provide any platform"，用 imagetools create 直接 registry 间拷贝绕过本地存储。
-    echo "  ↻ push 失败，imagetools create 兜底..."
-    if docker buildx imagetools create -t "$REGISTRY/$path" "$img" >> "$LOAD_LOG" 2>&1; then
-      echo "  ✓ done (via imagetools)"
+    echo "  ↻ imagetools 失败，docker push 兜底（单平台 digest，chart pin @digest 时会回源）..."
+    if docker tag "$img" "$REGISTRY/$path" \
+       && docker push "$REGISTRY/$path" >> "$LOAD_LOG" 2>&1; then
+      echo "  ✓ done (docker push)"
     else
       echo "  ✗ FAILED (see $LOAD_LOG)"
       failed_images+=("$img")

@@ -1244,16 +1244,21 @@ for img in "${IMAGES[@]}"; do
   #       push 也必须用去前缀路径，否则 repo 路径不匹配 → 404。
   path="${img#*/}"
   echo "[push] $img → $REGISTRY/$path"
-  if docker tag "$img" "$REGISTRY/$path" \
-     && docker push "$REGISTRY/$path" >> "$LOAD_LOG" 2>&1; then
-    echo "  ✓ done"
+  # ★ imagetools create 为主（不是兜底）：保留上游完整多平台 manifest list 的 digest。
+  # helm chart 常以 tag@sha256:<list digest> pin 镜像，docker push 只推单平台 manifest
+  # （digest 不同）→ containerd 按 digest 取 manifest 时 registry 没那个 list digest → 404 回源。
+  # imagetools 直接 registry 间拷贝 list，digest 与 chart pin 一致；且绕过本机存储畸变。
+  if docker buildx imagetools create -t "$REGISTRY/$path" "$img" >> "$LOAD_LOG" 2>&1; then
+    echo "  ✓ done (imagetools)"
   else
-    # 兜底：本机 docker 对部分镜像（如 cert-manager-*）存储畸变，
-    # push 报 "does not provide any platform"，用 imagetools create 直拷绕过。
-    echo "  ↻ push 失败，imagetools create 兜底..."
-    docker buildx imagetools create -t "$REGISTRY/$path" "$img" >> "$LOAD_LOG" 2>&1 \
-      && echo "  ✓ done (via imagetools)" \
-      || { echo "  ✗ FAILED"; failed_images+=("$img"); }
+    # 兜底：imagetools 因代理抖动/上游不可达失败时，docker push 仍可用（单平台 digest）。
+    echo "  ↻ imagetools 失败，docker push 兜底..."
+    if docker tag "$img" "$REGISTRY/$path" \
+       && docker push "$REGISTRY/$path" >> "$LOAD_LOG" 2>&1; then
+      echo "  ✓ done (docker push)"
+    else
+      echo "  ✗ FAILED"; failed_images+=("$img")
+    fi
   fi
 done
 
@@ -1292,10 +1297,17 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
 > - 所以预灌 push 也必须用 `localhost:5001/a/b`（去前缀），registry 存的 repo 才是 `a/b`，与 mirror 请求对齐
 > - 若 push 成 `localhost:5001/registry.k8s.io/a/b`（带前缀），mirror 请求 `a/b` 在 registry 找不到 → 404 → fallback 上游
 >
-> ⚠️ **cert-manager 类镜像 push 会失败（本机 docker 存储畸变）**:
-> - 现象：`docker push` 报 `image ... does not provide any platform`
+> 💡 **为什么以 `imagetools create` 为主、`docker push` 只兜底（2026-07-03 实战修订，见 `docs/12` §B.4）**:
+> - 📖 **digest pin**：helm chart 几乎都以 `tag@sha256:<digest>` 锁版本（可重复部署）。这个 digest 是上游**多平台 manifest list** 的 digest（如 ingress-nginx controller v1.15.1 的 `594ceea…`）。
+> - ⚠️ **docker push 的坑**：本机 `docker pull` 只取 amd64 单平台；`docker push <retag>` 推的是这条**单平台 manifest**，digest 不同（`de8fd8f1…`），且 local registry 里**根本没有** list digest `594ceea…`。
+> - 🔗 **为什么必然 miss**：节点 containerd 解析 `tag@digest` 时**按 digest 取 manifest**（tag 只是提示），向 local registry 请求 `sha256:594ceea…` → registry 只有 `de8fd8f1…`（挂在 tag 下）→ 404 → fallback 上游（又遇代理/上游问题）。ingress-nginx 实战就是踩这个。
+> - ✅ **imagetools create 为主**：直接在上游 registry 与 local registry 间拷贝**完整多平台 manifest list**，list digest 与 chart pin 完全一致，且顺带绕过本机 docker 存储畸变（多平台 index 不自洽）。
+> - 💡 **docker push 兜底**：imagetools 因代理抖动/上游不可达失败时，若该 chart 不 pin digest，单平台 manifest 仍可用。
+>
+> ⚠️ **部分镜像 docker push 直接报错（本机存储畸变，imagetools 正好绕过）**:
+> - 现象：`docker push` 报 `image ... does not provide any platform`（cert-manager 类）
 > - 原因：本机 docker 对这些镜像存成了"多平台 index 引用但缺平台 manifest"
-> - 修复：脚本自动 fallback `docker buildx imagetools create`（registry 间直拷，绕过本地存储）
+> - 修复：imagetools 主策略下这类镜像天然走 registry 间直拷，不再触发此报错
 >
 > 💡 **为什么不再用 kind load**:
 > - kind load 内部走 `docker save | ctr import --all-platforms`
@@ -1320,7 +1332,7 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
 
 > ⚠️ **方案 C 执行顺序（取代下面单一脚本调用）**:
 > 1. `./deploy/local-registry.sh up` —— 起 registry + 接 kind 网络（首次会拉 `registry:3` 镜像）
-> 2. `./deploy/preload-images.sh` —— pull + push 到 registry（脚本已是方案 C 版）
+> 2. `./deploy/preload-images.sh` —— pull + `imagetools create` 为主推到 registry（保留多平台 digest，docker push 兜底）
 > 3. 验证：`curl -s http://localhost:5001/v2/_catalog` 应有 18 个 repo
 >
 > 💡 下面 Step 1 的命令仍可跑（脚本路径未变），但脚本行为已是 push 到 registry，不再是 kind load。详见 `docs/12` §10/§11。
@@ -1535,8 +1547,18 @@ $ helm repo update
 $ helm install ingress-nginx ingress-nginx/ingress-nginx \
     --namespace ingress-nginx --create-namespace \
     --values deploy/components/ingress-nginx.values.yaml \
-    --version 4.13.0
+    --version 4.15.1
 ```
+
+> ⚠️ **chart 版本必须与预灌的 controller tag 同步（实战踩坑，见 `docs/12` §B.4）**:
+> - chart **4.15.1** ↔ controller **v1.15.1**（预灌的就是 v1.15.1）。chart 4.13.0 ↔ controller v1.13.0，装错会 `ImagePullBackOff`。
+> - 💡 升级 controller 时，`preload-images.sh` 的 tag 与 chart `--version` 必须一起改。
+> - 已装过想改版本：`helm upgrade`（同参数，把 `install` 换 `upgrade`）。
+>
+> ⚠️ **ingress-nginx 部署三大坑（2026-07-03 实战，详见 `docs/12` §B.4）**:
+> 1. **digest 不匹配（最隐蔽）**：chart 以 `tag@sha256:<多平台 list digest>` pin，若预灌用 `docker push`（单平台 digest），containerd 按 digest 取 manifest → registry 无该 list digest → 404 回源。preload 已统一改 `imagetools create` 保留 list digest，正常不会再踩。手动补救：`docker buildx imagetools create -t localhost:5001/ingress-nginx/controller:v1.15.1 registry.k8s.io/ingress-nginx/controller:v1.15.1`。
+> 2. **hostNetwork 端口死锁**：`helm upgrade` 滚动时旧 Pod 仍占 control-plane 的 hostNetwork 80/443，新 Pod `FailedScheduling: node(s) had no available port`。修复：`kubectl -n ingress-nginx delete pod <旧 Pod>` 释放端口。
+> 3. **controller 版本对不上**：见上面 chart 版本同步。
 
 > 📖 **Helm 命令解释**:
 >

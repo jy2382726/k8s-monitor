@@ -150,7 +150,7 @@ server = "http://kind-registry:5000"
 **(a) `deploy/preload-images.sh`**
 
 - 从 `IMAGES` 数组**移除 `kindest/node:v1.31.14`**（它是 kind 节点本身镜像，节点内 containerd 早已具备，无 Pod 引用，推 registry 白费 1.42 GB）。
-- Step 2 整段替换为「**去前缀 push + imagetools 兜底**」：
+- Step 2 整段替换为「**imagetools 为主（保留多平台 digest）+ docker push 兜底**」（理由见附录 B.4）：
 
 ```bash
 # ===== 改前 =====
@@ -170,15 +170,16 @@ for img in "${IMAGES[@]}"; do
   # 故 push 也去掉 registry 前缀（registry.k8s.io/a/b → a/b），否则 repo 路径不匹配 → 404。
   path="${img#*/}"
   echo "[push] $img → $REGISTRY/$path"
-  if docker tag "$img" "$REGISTRY/$path" \
-     && docker push "$REGISTRY/$path" >> "$LOAD_LOG" 2>&1; then
-    echo "  ✓ done"
+  # ★ imagetools create 为主（不是兜底）：保留上游完整多平台 manifest list 的 digest，
+  # helm chart 以 tag@sha256:<list digest> pin 时才能命中（见附录 B.4 digest pin 盲区）。
+  # docker push 仅兜底：imagetools 因代理抖动失败、且 chart 不 pin digest 时可用。
+  if docker buildx imagetools create -t "$REGISTRY/$path" "$img" >> "$LOAD_LOG" 2>&1; then
+    echo "  ✓ done (imagetools)"
   else
-    # 兜底：本机 docker 存储畸变（多平台 index 无平台 manifest）时 push 报
-    # "does not provide any platform"，用 imagetools create 直接 registry 间拷贝绕过。
-    echo "  ↻ push 失败，imagetools create 兜底..."
-    if docker buildx imagetools create -t "$REGISTRY/$path" "$img" >> "$LOAD_LOG" 2>&1; then
-      echo "  ✓ done (via imagetools)"
+    echo "  ↻ imagetools 失败，docker push 兜底（单平台 digest，chart pin @digest 时会回源）..."
+    if docker tag "$img" "$REGISTRY/$path" \
+       && docker push "$REGISTRY/$path" >> "$LOAD_LOG" 2>&1; then
+      echo "  ✓ done (docker push)"
     else
       echo "  ✗ FAILED (see $LOAD_LOG)"
       failed_images+=("$img")
@@ -229,7 +230,7 @@ server = "https://registry.k8s.io"
    - 节点 pull `kind-registry:5000` 走 kind 内网，已有 `containerd-no-proxy.conf` 的 `NO_PROXY=*` 兜底 ✓
 5. **mirror 路径不带 registry 前缀（最易踩的坑）**：containerd 经 `hosts.toml` mirror 拉取时，请求路径只保留 image path（不含 `registry.k8s.io` 等 host 段）。预灌 push 必须用 `${img#*/}` 去掉 registry 前缀，否则 registry 里存的 repo（带前缀）与 mirror 请求（不带前缀）不匹配 → 404 → fallback 上游。
 6. **节点 HTTP 客户端走代理的假象（验证陷阱）**：节点容器继承 docker daemon 的 `HTTP_PROXY=127.0.0.1:7890`，节点内 `curl`/`python urllib` 访问 `kind-registry` 会走代理 → `Connection refused`。但 **containerd 进程有 `NO_PROXY=*`**（drop-in 生效），拉镜像直连正常。**验证 registry 可达性不能用 curl/urllib，要用 containerd 实际 pull 或部署 Pod 看 kubelet 行为**。
-7. **部分镜像本机 docker 存储畸变 → push 失败**：实测 `quay.io/jetstack/cert-manager-*` 4 个镜像 `docker push` 报 `does not provide any platform`（多平台 index 引用但缺平台 manifest），`docker rmi` + `--platform` 重拉无效。**修复**：脚本对 push 失败的镜像自动 fallback 到 `docker buildx imagetools create`（registry 间直拷，绕过本地存储）。其他镜像 push 正常。
+7. **部分镜像本机 docker 存储畸变 → push 失败**：实测 `quay.io/jetstack/cert-manager-*` 4 个镜像 `docker push` 报 `does not provide any platform`（多平台 index 引用但缺平台 manifest），`docker rmi` + `--platform` 重拉无效。**修复**：脚本对 push 失败的镜像自动 fallback 到 `docker buildx imagetools create`（registry 间直拷，绕过本地存储）。其他镜像 push 正常。（**2026-07-03 修订**：此"imagetools 兜底"已升格为**主策略**——所有 chart 以 `tag@sha256:<list digest>` pin 的镜像都需 imagetools 保留多平台 list digest，否则单平台 digest 与 chart pin 不匹配、mirror 必 miss。详见附录 B.4。）
 
 ---
 
@@ -373,8 +374,8 @@ Command Output: ctr: content digest sha256:<某 digest>: not found
 | ② 起 registry | `registry:3` 容器 + 接入 kind 网络 + ConfigMap | ✓ running |
 | ③ localhost:5001 hosts.toml | alias → kind-registry:5000 | ✓ |
 | ④ 4 上游 hosts.toml | 加 kind-registry:5000 首 host | ✓ |
-| ⑤ preload 改造 | pull + 去前缀 push + imagetools 兜底 | ✓ |
-| ⑥ 预灌 18 镜像 | 14 docker push + 4 imagetools（cert-manager） | ✓ 18/18 |
+| ⑤ preload 改造 | pull + imagetools 为主 + docker push 兜底（见 B.4） | ✓ |
+| ⑥ 预灌 18 镜像 | 18 imagetools（统一保留多平台 digest） | ✓ 18/18 |
 | ⑦ 端到端 | Pod 799ms 拉到，mirror 命中 | ✓ |
 
 ### B.2 踩坑与修复（按发现顺序）
@@ -390,3 +391,41 @@ Command Output: ctr: content digest sha256:<某 digest>: not found
 - registry：kind 网络双栈（IPv4 172.20.0.5 / IPv6 fc00:f853:ccd:e793::5），runtime=nvidia（无害，mode=auto 直通）
 - containerd：`NO_PROXY=*` 绕代理直连 registry
 - 端到端拉取耗时：**799ms**（22 MB metrics-server，本地 loopback 等效）
+
+---
+
+### B.4 digest pin 盲区与脚本策略反转（2026-07-03 ingress-nginx 实战修订）
+
+> 初版预灌以 `docker tag + push` 为主、`imagetools create` 仅作 cert-manager 类存储畸变的兜底（见 B.2 坑 2）。部署 ingress-nginx 时踩出**系统性盲区**：helm chart 常以 `tag@sha256:<list digest>` pin 镜像，而 `docker push` 推的单平台 manifest digest 与之多平台 list digest 不一致，mirror 命中时按 digest 取不到 → 回源。已将脚本反转为 **imagetools 为主、docker push 兜底**。
+
+**实战经过（ingress-nginx，3 个坑叠加）**：
+
+| # | 坑 | 现象 | 修复 |
+|---|----|------|------|
+| 1 | **chart 版本脱节** | plan 原 Task 5.3 装 chart **4.13.0**（controller v1.13.0），但预灌的是 controller **v1.15.1** → `ImagePullBackOff` | 升级 chart → **4.15.1**（与 v1.15.1 对应） |
+| 2 | **digest 不匹配**（本节主旨） | chart pin `controller:v1.15.1@sha256:594ceea…`（多平台 list digest）；初版预灌 `docker push` 存的是单平台 manifest（digest `de8fd8f1…`）→ containerd 按 digest 取 manifest → registry 无 594ceea → 404 → 回源 | `imagetools create` 重预灌，list digest 还原为 `594ceea…`；节点 1.733s 命中本地 registry |
+| 3 | **hostNetwork 端口死锁** | 修 2 后 `helm upgrade` 滚动，旧 Pod 仍占 control-plane 的 hostNetwork 80/443，新 Pod `FailedScheduling: node(s) had no available port` | 手动 `kubectl delete pod <旧 Pod>` 释放端口，新 Pod 即调度 |
+
+**坑 2 的机制（为什么 docker push 必然踩）**：
+
+- 现代镜像在上游 registry 以**多平台 manifest list** 发布，其 digest 是 list digest（ingress-nginx controller v1.15.1 = `594ceea…`）。
+- 本机 `docker pull` 默认只取 amd64 单平台；`docker push <retag>` 推的是这条**单平台 manifest**，digest 不同（`de8fd8f1…`），且 local registry 里**根本不存在** list digest `594ceea…`。
+- helm chart 几乎都以 `tag@sha256:<list digest>` 锁版本（可重复部署）。节点 containerd 解析 `tag@digest` 时**按 digest 取 manifest**（tag 只是提示），向 local registry 请求 `sha256:594ceea…` → registry 只有 `de8fd8f1…`（挂在 tag v1.15.1 下）→ 404 → fallback 上游。
+- 故**只要 chart pin @digest，docker push 预灌就必然 miss**。这不是个别镜像问题——prometheus / grafana / argocd / kube-state-metrics 等所有 chart-pin-digest 镜像都会中招。
+
+**修复（脚本反转）**：Step 2 改为 `imagetools create` **为主**——直接在上游 registry 与 local registry 间拷贝**完整多平台 manifest list**，list digest 与 chart pin 完全一致，且顺带绕过本机 docker 存储畸变（附录 A 的多平台 index 不自洽问题）。`docker push` 降为兜底：imagetools 因代理抖动/上游不可达失败时，若该 chart 不 pin digest，单平台 manifest 仍可用。
+
+**验证（重灌后逐个核对 mediaType + digest）**：向 local registry 请求每个 repo:tag 的 manifest（带多平台 Accept 头），看响应 `Content-Type` 与 `Docker-Content-Digest`：
+
+```
+ingress-nginx/controller:v1.15.1   Content-Type: application/vnd.oci.image.index.v1+json
+                                   Docker-Content-Digest: sha256:594ceea76b01c592858f803f9ff4d2cb40542cae2060410b2c95f75907d659e1
+```
+
+判据：`Content-Type` 应为 `…image.index.v1+json` / `…manifest.list.v2+json`（多平台 list），**不应**是单平台 `…image.manifest.v1+json`；ingress-nginx controller v1.15.1 的 digest 必须是 `594ceea…`（与 chart pin 逐字符一致）。
+
+**实测重灌结果（2026-07-03）**：**18/18 全部多平台 list**（imagetools 成功），ingress-nginx controller digest = `594ceea…` ✓ 与 chart pin 逐字符一致 = mirror 必命中。
+
+> **echo-server 小插曲（印证「imagetools 为主 + docker push 兜底」机制）**：首次重灌时 `ealen/echo-server` 因 docker.io 经代理持续 `connection reset by peer`（8 次重试全败）回退 docker push（单平台 digest `322eaaaf…`）。**当时也不影响部署**——它在 `deploy/verify/test-app.yaml` 以纯 tag 引用（无 `@digest` pin），containerd 按 tag 命中单平台 manifest 即可拉 amd64。代理恢复后重跑一条 `docker buildx imagetools create -t localhost:5001/ealen/echo-server:0.9.0 docker.io/ealen/echo-server:0.9.0`（attempt 1 即成），补齐为多平台 list（digest `2cc9f847…`）。这正说明设计意图：**网络瞬态不卡流程（docker push 兜底保可用），事后一条命令即可补齐为 canonical 多平台**。
+
+**关联**：坑 1（chart 版本同步）已回写 plan Task 5.3（chart 4.13.0 → 4.15.1）；坑 3（hostNetwork 滚动端口冲突）已补进 plan Task 5.3 失败排查。

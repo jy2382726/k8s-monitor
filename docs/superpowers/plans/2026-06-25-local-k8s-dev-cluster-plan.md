@@ -1042,7 +1042,7 @@ $ for f in *.yaml; do
 ### Task 3.3: 编写镜像预拉取脚本
 
 > ⚠️ **本 Task 已被 `docs/12` 方案 C 取代（保留以下旧内容仅供历史参考）**。
-> 实际脚本已在仓库 `deploy/preload-images.sh`：pull + **去前缀 push 到 `localhost:5001`** + `docker buildx imagetools create` 兜底（cert-manager 类存储畸变）。
+> 实际脚本已在仓库 `deploy/preload-images.sh`：pull + **`docker buildx imagetools create` 为主**（保留多平台 list digest，chart 以 `tag@sha256:<list digest>` pin 时才能命中）+ `docker push` 兜底。
 > 另需配套：`deploy/local-registry.sh`（registry 容器 up/down/status）、`deploy/containerd-certs.d/localhost:5001/hosts.toml`（自研镜像留路）、4 个上游 `hosts.toml` 加 `kind-registry:5000` 首 host。
 > 完整改动清单按 `docs/12` §7。
 
@@ -1204,7 +1204,7 @@ $ bash -n /root/projects/k8s-monitor/deploy/preload-images.sh && echo "Syntax OK
 
 > ⚠️ **本 Task 按 `docs/12` 方案 C 执行（替代下面的 Step 1-2）**：
 > 1. `./deploy/local-registry.sh up`（起 registry + 接入 kind 网络）
-> 2. `./deploy/preload-images.sh`（pull + 去**前缀** push 到 `localhost:5001`，cert-manager 类自动走 imagetools）
+> 2. `./deploy/preload-images.sh`（pull + `imagetools create` 为主推到 `localhost:5001`，统一保留多平台 digest；docker push 兜底）
 > 3. 验证：`curl -s http://localhost:5001/v2/_catalog` 应有 18 个 repo（去前缀名，如 `metrics-server/metrics-server`）
 >
 > 下面 Step 1-2 的命令仍可跑（脚本路径未变），但脚本行为已是 push 到 registry，不再是 `kind load`。详见 `docs/12` §10/§11。
@@ -1430,10 +1430,11 @@ $ cd /root/projects/k8s-monitor
 $ helm install ingress-nginx ingress-nginx/ingress-nginx \
     --namespace ingress-nginx --create-namespace \
     --values deploy/components/ingress-nginx.values.yaml \
-    --version 4.13.0
+    --version 4.15.1
 ```
 
-> **chart version 说明**: 4.13.0 是与 controller-v1.15.1 对应的 chart 版本。如果失败可省略 `--version` 用最新。
+> **chart version 说明**: chart **4.15.1** 与预灌的 controller **v1.15.1** 对应（chart 4.13.0 对应 controller v1.13.0，会 `ImagePullBackOff`）。
+> ⚠️ **chart 版本必须与 `preload-images.sh` 里 controller tag 同步**——升级 controller 时两者一起改，否则节点拉到不存在的 tag。已装过想改版本用 `helm upgrade`（同参数，`install` 换 `upgrade`）。
 
 - [ ] **Step 3: 等 Pod Ready**
 
@@ -1470,6 +1471,9 @@ Date: ...
 - Pod Pending → `kubectl -n ingress-nginx describe pod <pod>` 看 Events
 - Pod 不调度到 control-plane → 检查 `kubectl get nodes --show-labels | grep ingress-ready`，control-plane 应有该标签
 - curl localhost 不通 → `kubectl -n ingress-nginx logs <pod>` 看是否 hostNetwork 绑定成功
+- **`ImagePullBackOff`（controller 版本对不上）** → chart `--version` 与预灌的 controller tag 不匹配。预灌 v1.15.1 → 用 chart 4.15.1（不是 4.13.0）。`kubectl -n ingress-nginx get pod -o jsonpath='{.items[*].spec.containers[*].image}'` 核对实际拉的 tag。
+- **mirror 不命中（digest 不匹配）** → Pod events 拉取耗时数秒（回源）或失败。根因：预灌用了 `docker push`（单平台 digest），但 chart pin `tag@sha256:<多平台 list digest>`，containerd 按 digest 取 manifest → registry 无该 list digest → 404 回源。修复：`docker buildx imagetools create -t localhost:5001/ingress-nginx/controller:v1.15.1 registry.k8s.io/ingress-nginx/controller:v1.15.1` 重灌（保留 list digest）。preload 脚本已统一改用 imagetools，正常不会再踩（见 `docs/12` §B.4）。
+- **`helm upgrade` 后新 Pod `FailedScheduling: node(s) had no available port`** → ingress-nginx 用 hostNetwork，滚动时旧 Pod 仍占 control-plane 的 80/443。修复：`kubectl -n ingress-nginx delete pod <旧 Pod>` 释放端口，新 Pod 即调度。
 
 ---
 

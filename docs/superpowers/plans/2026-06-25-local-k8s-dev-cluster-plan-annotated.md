@@ -17,6 +17,15 @@
 **对应设计稿**: `docs/superpowers/specs/2026-06-25-local-k8s-dev-cluster-design.md`
 **对应原手册**: `docs/superpowers/plans/2026-06-25-local-k8s-dev-cluster-plan.md`
 
+> ⚠️ **重要更新（2026-07-03）—— 镜像预灌方式已变更；本注释版的 Task 3.3 / 4.1 / 5.1 Step4 仍保留旧 `kind load` 教学，但已过时**。
+>
+> 单一真相在 `docs/12-local-registry镜像预灌方案.md`（含根因排查附录 A + 实施记录附录 B）。给注释版读者的简明解释：
+>
+> - 📖 **原方案**：`docker pull` 镜像到宿主 → `kind load docker-image` 灌进 kind 节点 containerd。
+> - ⚠️ **为什么失败**：`kind load` 内部用 `docker save | ctr import --all-platforms`；本机 `docker save` 输出的 tar 包**多平台 index 不自洽**（顶层列 17 平台、blob 只够 amd64），节点取不到非 amd64 平台 manifest → `content digest not found`，100% 失败。
+> - 💡 **新方案 C**：起本地 `registry:3` 容器，宿主 `docker push` 进去，节点 containerd 经 `hosts.toml` mirror `pull`，**彻底绕开 `docker save`**。实测 Pod 799ms 命中。
+> - 🔗 **下面 Task 3.3/4.1/5.1 Step4 的旧内容仅作"理解 kind load 原理"的教学保留**，实操按 `docs/12`。
+
 ---
 
 ## 0. 如何使用本手册
@@ -1220,21 +1229,31 @@ for img in "${IMAGES[@]}"; do               # 遍历镜像
   fi
 done
 
-# === Step 2: kind load docker-image ===
-# kind load 把宿主机 Docker 缓存的镜像，灌入 kind 节点的 containerd
-# 这是 kind 节点能直接用本地镜像的关键
+# === Step 2: push 到 local registry（方案 C，已取代 kind load，详见 docs/12）===
+# 把镜像 push 到本地 registry，节点 containerd 经 hosts.toml mirror 自动 pull，
+# 不再"灌入节点"。
 
-if ! kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-  echo "⚠️ 集群 '$CLUSTER_NAME' 不存在，跳过 kind load"
-  exit 0
+if ! docker inspect -f '{{.State.Running}}' kind-registry 2>/dev/null | grep -q true; then
+  echo "⚠️ kind-registry 未运行，请先执行 deploy/local-registry.sh up"
+  exit 1
 fi
 
 for img in "${IMAGES[@]}"; do
-  echo "[load] $img"
-  if kind load docker-image "$img" --name "$CLUSTER_NAME" >> "$LOAD_LOG" 2>&1; then
+  # ★ 关键：去 registry 前缀（registry.k8s.io/a/b → a/b）
+  # 原因：containerd mirror 拉取时请求路径不含 registry host 段，
+  #       push 也必须用去前缀路径，否则 repo 路径不匹配 → 404。
+  path="${img#*/}"
+  echo "[push] $img → $REGISTRY/$path"
+  if docker tag "$img" "$REGISTRY/$path" \
+     && docker push "$REGISTRY/$path" >> "$LOAD_LOG" 2>&1; then
     echo "  ✓ done"
   else
-    echo "  ✗ FAILED (see $LOAD_LOG)"
+    # 兜底：本机 docker 对部分镜像（如 cert-manager-*）存储畸变，
+    # push 报 "does not provide any platform"，用 imagetools create 直拷绕过。
+    echo "  ↻ push 失败，imagetools create 兜底..."
+    docker buildx imagetools create -t "$REGISTRY/$path" "$img" >> "$LOAD_LOG" 2>&1 \
+      && echo "  ✓ done (via imagetools)" \
+      || { echo "  ✗ FAILED"; failed_images+=("$img"); }
   fi
 done
 
@@ -1261,17 +1280,27 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
 > - `${ARR[@]}` 展开为数组所有元素
 > - 双引号保证元素含空格也正确处理（如 `ealen/echo-server:0.9.0`）
 >
-> 📖 **`docker pull` vs `kind load docker-image` 的区别**:
+> 📖 **方案 C 的三步镜像流（取代 kind load）**:
 >
-> | 命令 | 作用 | 镜像存哪 |
+> | 阶段 | 动作 | 镜像存哪 |
 > |---|---|---|
-> | `docker pull X` | 从远端拉到本地 Docker 缓存 | 宿主机 `/var/lib/docker/` |
-> | `kind load docker-image X` | 把宿主机缓存复制到 kind 节点 | 节点容器内 `/var/lib/containerd/` |
+> | 预灌 | 宿主 `docker pull` → `docker push localhost:5001/<path>` | local registry 容器（宿主 docker 卷）|
+> | 运行时 | 节点 containerd 经 `hosts.toml` mirror `pull` | 节点容器内 `/var/lib/containerd/` |
 >
-> 💡 **为什么要 kind load**:
-> - kind 节点是独立容器，有自己的 containerd 镜像存储
-> - 不 load 的话，节点内 kubelet 拉镜像会走网络（慢/失败）
-> - load 后，节点内 containerd 直接有镜像，Pod 启动秒级
+> 💡 **为什么 push 要去 registry 前缀**:
+> - containerd 拉取 `registry.k8s.io/a/b` 时，经 hosts.toml mirror 到 `kind-registry:5000`，**请求路径是 `/v2/a/b/...`（不含 `registry.k8s.io`）**
+> - 所以预灌 push 也必须用 `localhost:5001/a/b`（去前缀），registry 存的 repo 才是 `a/b`，与 mirror 请求对齐
+> - 若 push 成 `localhost:5001/registry.k8s.io/a/b`（带前缀），mirror 请求 `a/b` 在 registry 找不到 → 404 → fallback 上游
+>
+> ⚠️ **cert-manager 类镜像 push 会失败（本机 docker 存储畸变）**:
+> - 现象：`docker push` 报 `image ... does not provide any platform`
+> - 原因：本机 docker 对这些镜像存成了"多平台 index 引用但缺平台 manifest"
+> - 修复：脚本自动 fallback `docker buildx imagetools create`（registry 间直拷，绕过本地存储）
+>
+> 💡 **为什么不再用 kind load**:
+> - kind load 内部走 `docker save | ctr import --all-platforms`
+> - 本机 `docker save` 输出多平台 index 不自洽（详见 `docs/12` 附录 A）→ 100% 失败
+> - 方案 C 用 `docker push`（只推当前平台）+ registry，从机制上绕开
 >
 > 💡 **为什么要包一层 `pull_with_retry`**:
 > - 代理 (127.0.0.1:7890) 偶发 `connection reset by peer` / `unexpected EOF`
@@ -1288,6 +1317,13 @@ docker images --format '{{.Repository}}:{{.Tag}}' \
 ## Phase 4: 镜像预拉取
 
 ### Task 4.1: 执行镜像预拉取
+
+> ⚠️ **方案 C 执行顺序（取代下面单一脚本调用）**:
+> 1. `./deploy/local-registry.sh up` —— 起 registry + 接 kind 网络（首次会拉 `registry:3` 镜像）
+> 2. `./deploy/preload-images.sh` —— pull + push 到 registry（脚本已是方案 C 版）
+> 3. 验证：`curl -s http://localhost:5001/v2/_catalog` 应有 18 个 repo
+>
+> 💡 下面 Step 1 的命令仍可跑（脚本路径未变），但脚本行为已是 push 到 registry，不再是 kind load。详见 `docs/12` §10/§11。
 
 > 📖 **本 Task 的目的**: 跑上一步写的脚本，把镜像都拉到本地。
 >
@@ -1408,16 +1444,22 @@ $ kubectl get nodes -o wide
 > - `kind create cluster` 自动设置 context 为新集群
 > - 切换: `kubectl config use-context <name>`
 
-#### Step 4: 灌入镜像
+#### Step 4: 确认 local registry 就绪（无需"灌入"）
 
 ```bash
-$ ./deploy/preload-images.sh
+$ ./deploy/local-registry.sh status    # registry running + 已接 kind 网
+$ curl -s http://localhost:5001/v2/_catalog | head   # 18 个 repo 就绪
 ```
 
-> 💡 **第二次跑预拉取脚本**:
-> - 第一次（Phase 4）: 集群还没建，只跑 `docker pull`
-> - 这次（Phase 5 Task 5.1）: 集群已建，自动跑 `kind load` 灌入节点
-> - 脚本会自动检测集群是否存在，决定是否执行 kind load
+> ⚠️ **方案 C 下无需灌入**（已取代旧 `kind load` 步骤）。
+>
+> 💡 **为什么不用再灌入**:
+> - 镜像已在 local registry（Task 4.1 push 的）
+> - 节点 containerd 经 `hosts.toml` mirror，自动从 `kind-registry:5000` 拉
+> - kubelet 拉镜像 → containerd 查 hosts.toml → 第一优先 `kind-registry:5000` → 命中（实测 799ms）
+> - 不再需要"把镜像复制进节点"这个动作
+>
+> 🔗 **前提**: `local-registry.sh up` 已执行 + 4 个上游 `hosts.toml` 已加 `kind-registry:5000` 首 host（见 `docs/12` §7.2(b)）。
 
 #### Step 5: 验证初始状态
 

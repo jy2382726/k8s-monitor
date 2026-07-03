@@ -1,0 +1,8 @@
+# 把对 "localhost:5001" 这个 registry 名的拉取请求，
+# 导向 kind 网络里的 kind-registry:5000（节点内的 localhost 不是宿主机，需此 alias）。
+# 用途：自研镜像 push 到 localhost:5001 后，pod yaml 以 localhost:5001/<镜像名> 引用即可拉取。
+# 注意：业务组件镜像走各上游 registry 的 hosts.toml（mirror），不经本文件。
+server = "http://kind-registry:5000"
+
+[host."http://kind-registry:5000"]
+  capabilities = ["pull", "resolve"]

@@ -1,4 +1,8 @@
 server = "https://ghcr.io"
 
+# 本地 registry 优先（预灌命中即用）；未命中 fallback 到下方 daocloud 加速
+[host."http://kind-registry:5000"]
+  capabilities = ["pull", "resolve"]
+
 [host."https://m.daocloud.io/ghcr.io"]
   capabilities = ["pull", "resolve"]

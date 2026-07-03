@@ -5,6 +5,10 @@
 
 server = "https://registry-1.docker.io"
 
+# 本地 registry 优先（预灌命中即用）；未命中 fallback 到下方 daocloud / 1ms 加速
+[host."http://kind-registry:5000"]
+  capabilities = ["pull", "resolve"]
+
 [host."https://docker.m.daocloud.io"]
   capabilities = ["pull", "resolve"]
 

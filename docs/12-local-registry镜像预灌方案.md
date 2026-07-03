@@ -93,12 +93,12 @@ registry 是一个**普通 docker 容器**（`registry:3`），和 3 个 kind �
 | 策略 | preload 怎么做 | helm values 要不要改 | 适合本项目？ |
 |---|---|---|---|
 | **A. retag（官方示例）** | tag 成 `localhost:5001/镜像名` 再 push | **要全改**（5 个 values + `kube-prometheus-stack` 等大 chart 内部散落 image） | ❌ 维护噩梦 |
-| **B. mirror** ✅ 选定 | tag 成 `localhost:5001/<原完整名>` push，**保持原路径** | **不用改** | ✅ 无缝 |
+| **B. mirror** ✅ 选定 | tag 成 `localhost:5001/<原 path>` push（**去 registry 前缀**） | **不用改** | ✅ 无缝 |
 | **C. pull-through cache** | 不预灌，registry 回源 daocloud 并缓存 | 不用改 | ⚠️ 是"在线缓存"非"离线预灌"，代理抖动时仍可能失败 |
 
 ### 5.2 选 mirror 的理由
 
-保持镜像**原完整名**作为 repo 路径 push（如 `localhost:5001/registry.k8s.io/metrics-server/metrics-server:v0.8.1`），registry 内存储路径就是 `registry.k8s.io/metrics-server/metrics-server`。节点 containerd 拉取 `registry.k8s.io/...` 时，通过该 registry 的 `hosts.toml` **第一优先指向 `kind-registry:5000`**，请求路径天然对齐，命中预灌内容；未命中的 fallback 到 daocloud。**helm chart 完全不动。**
+预灌时**去掉 registry host 前缀**作为 repo 路径 push（如 `registry.k8s.io/metrics-server/metrics-server` → `localhost:5001/metrics-server/metrics-server`）。原因：containerd 经 hosts.toml mirror 拉取时，请求路径**不含 registry host 段**，push 必须用同样的去前缀路径，repo 才能与 mirror 请求对齐、命中预灌内容；未命中的 fallback 到 daocloud。**helm chart 完全不动**（仍引用原 registry 名，如 `registry.k8s.io/...`）。
 
 ---
 
@@ -106,7 +106,9 @@ registry 是一个**普通 docker 容器**（`registry:3`），和 3 个 kind �
 
 | 时机 | 谁做什么 | 走哪 |
 |---|---|---|
-| **预灌阶段**（手动跑脚本） | 宿主 `docker pull <原镜像>` → `docker tag localhost:5001/<原完整名>` → `docker push` | 宿主 → `localhost:5001` → 存进 `kind-registry` 容器 |
+| **预灌阶段**（手动跑脚本） | 宿主 `docker pull <原镜像>` → `docker tag localhost:5001/<原 path>` → `docker push` | 宿主 → `localhost:5001` → 存进 `kind-registry` 容器 |
+
+> **关键**：`<原 path>` 是**去掉 registry host 后的路径**（`registry.k8s.io/a/b` → `a/b`）。containerd 经 hosts.toml mirror 拉取时请求路径不含 registry host 段，故 push 必须用同样的去前缀路径，否则 registry 存的 repo 与 mirror 请求不匹配 → 404。
 | **集群运行时**（Pod 起来） | kubelet 让节点 containerd 拉镜像，`hosts.toml` 指路 | 节点 → `kind-registry:5000`（优先，命中即用）/ daocloud（兜底） |
 
 ```
@@ -148,7 +150,7 @@ server = "http://kind-registry:5000"
 **(a) `deploy/preload-images.sh`**
 
 - 从 `IMAGES` 数组**移除 `kindest/node:v1.31.14`**（它是 kind 节点本身镜像，节点内 containerd 早已具备，无 Pod 引用，推 registry 白费 1.42 GB）。
-- Step 2 整段替换：
+- Step 2 整段替换为「**去前缀 push + imagetools 兜底**」：
 
 ```bash
 # ===== 改前 =====
@@ -162,15 +164,25 @@ for img in "${IMAGES[@]}"; do
 done
 
 # ===== 改后 =====
-REGISTRY="localhost:5001"
+REGISTRY="${REGISTRY:-localhost:5001}"
 for img in "${IMAGES[@]}"; do
-  echo "[push] $img → $REGISTRY/$img"
-  if docker tag "$img" "$REGISTRY/$img" \
-     && docker push "$REGISTRY/$img" >> "$LOAD_LOG" 2>&1; then
+  # mirror 语义：containerd 经 hosts.toml mirror 拉取时请求 path 不含 registry host 段，
+  # 故 push 也去掉 registry 前缀（registry.k8s.io/a/b → a/b），否则 repo 路径不匹配 → 404。
+  path="${img#*/}"
+  echo "[push] $img → $REGISTRY/$path"
+  if docker tag "$img" "$REGISTRY/$path" \
+     && docker push "$REGISTRY/$path" >> "$LOAD_LOG" 2>&1; then
     echo "  ✓ done"
   else
-    echo "  ✗ FAILED (see $LOAD_LOG)"
-    failed_images+=("$img")
+    # 兜底：本机 docker 存储畸变（多平台 index 无平台 manifest）时 push 报
+    # "does not provide any platform"，用 imagetools create 直接 registry 间拷贝绕过。
+    echo "  ↻ push 失败，imagetools create 兜底..."
+    if docker buildx imagetools create -t "$REGISTRY/$path" "$img" >> "$LOAD_LOG" 2>&1; then
+      echo "  ✓ done (via imagetools)"
+    else
+      echo "  ✗ FAILED (see $LOAD_LOG)"
+      failed_images+=("$img")
+    fi
   fi
 done
 ```
@@ -215,6 +227,9 @@ server = "https://registry.k8s.io"
 4. **proxy 影响评估（无新增问题）**：
    - 宿主 `docker push localhost:5001` 走 loopback，命中 docker daemon `NO_PROXY` 的 `localhost` ✓
    - 节点 pull `kind-registry:5000` 走 kind 内网，已有 `containerd-no-proxy.conf` 的 `NO_PROXY=*` 兜底 ✓
+5. **mirror 路径不带 registry 前缀（最易踩的坑）**：containerd 经 `hosts.toml` mirror 拉取时，请求路径只保留 image path（不含 `registry.k8s.io` 等 host 段）。预灌 push 必须用 `${img#*/}` 去掉 registry 前缀，否则 registry 里存的 repo（带前缀）与 mirror 请求（不带前缀）不匹配 → 404 → fallback 上游。
+6. **节点 HTTP 客户端走代理的假象（验证陷阱）**：节点容器继承 docker daemon 的 `HTTP_PROXY=127.0.0.1:7890`，节点内 `curl`/`python urllib` 访问 `kind-registry` 会走代理 → `Connection refused`。但 **containerd 进程有 `NO_PROXY=*`**（drop-in 生效），拉镜像直连正常。**验证 registry 可达性不能用 curl/urllib，要用 containerd 实际 pull 或部署 Pod 看 kubelet 行为**。
+7. **部分镜像本机 docker 存储畸变 → push 失败**：实测 `quay.io/jetstack/cert-manager-*` 4 个镜像 `docker push` 报 `does not provide any platform`（多平台 index 引用但缺平台 manifest），`docker rmi` + `--platform` 重拉无效。**修复**：脚本对 push 失败的镜像自动 fallback 到 `docker buildx imagetools create`（registry 间直拷，绕过本地存储）。其他镜像 push 正常。
 
 ---
 
@@ -256,15 +271,19 @@ server = "https://registry.k8s.io"
 
 ---
 
-## 11. 验证方法
+## 11. 验证方法（实测 2026-07-03）
 
-| 验证点 | 方法 | 期望 |
+| 验证点 | 方法 | 实测结果 |
 |---|---|---|
-| registry 容器在 kind 网络 | `docker inspect kind-registry --format '{{json .NetworkSettings.Networks}}'` | 含 `"kind"` |
-| 镜像已进 registry | `curl -s http://localhost:5001/v2/_catalog | jq` | 列出所有预灌 repo |
-| 节点命中 local registry | 部署一个 Pod 后 `kubectl describe pod <x> | grep -A2 Events`，或 `crictl images` 看节点镜像 | 镜像存在、拉取秒级 |
-| fallback 生效 | 故意不预灌某镜像，看 Pod 是否仍能起来 | 走 daocloud 在线拉、Pod 正常 |
-| 端到端 | 部署完整监控栈（kube-prometheus-stack 等），所有 Pod Running | 无 `ImagePullBackOff` |
+| registry 容器在 kind 网络 | `docker inspect kind-registry` Networks | 含 `kind`，IPv4 172.20.0.5 / IPv6 fc00::5 |
+| 节点 containerd 绕代理可达 registry | 看 containerd 日志 `host="kind-registry:5000"` | ✓（containerd 有 `NO_PROXY=*`） |
+| 镜像已进 registry（去前缀） | `curl localhost:5001/v2/_catalog` | 18 个 repo（`metrics-server/metrics-server` 等） |
+| **mirror 命中 local registry** | 部署 Pod `registry.k8s.io/metrics-server/...`，看 registry 日志 + Pod events | registry 收到 `HEAD /v2/metrics-server/metrics-server/manifests/v0.8.1`；Pod events: `Successfully pulled image ... in 799ms` |
+| fallback 生效 | （未单独测，hosts.toml 配置保证）local 没命中 → daocloud | 配置层保证 |
+
+**关键判据**：Pod events 的 `pulled ... in 799ms`（毫秒级 = 本地 registry 命中；在线拉取至少数秒）+ registry 日志有对应 mirror 请求 = 端到端通过。
+
+> ⚠️ 验证时**不要用节点内的 curl/urllib 判定 registry 可达性**——它们会走 `HTTP_PROXY=127.0.0.1:7890` 误报 `Connection refused`（见 §8 坑 6）。
 
 ---
 
@@ -339,3 +358,35 @@ Command Output: ctr: content digest sha256:<某 digest>: not found
 `docker pull` 默认只拉单平台（amd64），但本机 `docker save` 写出的 tar 顶层是完整 17 平台 `image index`、只带 amd64 blob，其余 15 个平台 manifest digest 在 tar 中不存在——**包内部不自洽**。`ctr import --all-platforms` 要求全部平台，必然失败。所有目标镜像在现代 registry 均以多平台 manifest list 发布，同一机制 100% 中招，故系统性失败。
 
 上游诱因（疑 nvidia 默认 runtime / docker 29.2.1 的 save 行为）未做最终拆分验证——方案 C 从机制上绕开 `docker save` 链路，无需先定位上游诱因即可根治。若未来要追溯上游诱因，可在干净 docker（runc 默认 runtime）环境复现 `docker save busybox` 对比 index 结构。
+
+---
+
+## 附录 B：实施记录（2026-07-03）
+
+> 本附录留档方案 C 的实际实施过程与踩坑修复，作为运维参考。设计依据见正文，根因排查见附录 A。
+
+### B.1 七步实施结果
+
+| 步骤 | 实施动作 | 结果 |
+|---|---|---|
+| ① local-registry.sh | up/down/status，幂等 | ✓ |
+| ② 起 registry | `registry:3` 容器 + 接入 kind 网络 + ConfigMap | ✓ running |
+| ③ localhost:5001 hosts.toml | alias → kind-registry:5000 | ✓ |
+| ④ 4 上游 hosts.toml | 加 kind-registry:5000 首 host | ✓ |
+| ⑤ preload 改造 | pull + 去前缀 push + imagetools 兜底 | ✓ |
+| ⑥ 预灌 18 镜像 | 14 docker push + 4 imagetools（cert-manager） | ✓ 18/18 |
+| ⑦ 端到端 | Pod 799ms 拉到，mirror 命中 | ✓ |
+
+### B.2 踩坑与修复（按发现顺序）
+
+1. **registry 启动瞬态 + proxy 假象**：registry 刚 `network connect` 后几秒内节点连接不稳；稳定后用节点 curl/urllib 测试仍报 `Connection refused`（误判为 registry 故障）。实际是 HTTP 客户端走 `127.0.0.1:7890` 代理失败，containerd（`NO_PROXY=*`）一直正常。**修复认知：验证用 containerd 实际 pull 或部署 Pod，不用 curl/urllib。**
+
+2. **cert-manager 4 镜像 push 失败（`does not provide any platform`）**：本机 docker 对这些镜像的存储畸变（多平台 index 缺平台 manifest）。`docker rmi` + `--platform` 重拉无效。**修复**：preload 脚本加 `docker buildx imagetools create` 兜底，registry 间直拷绕过本地存储。
+
+3. **mirror 不命中（404）**：初版预灌 push 带了 registry 前缀（`registry.k8s.io/a/b`），但 containerd mirror 请求路径不带前缀（`a/b`），repo 路径不匹配 → 404 → fallback daocloud（又遇 403）。**修复**：push 改用 `${img#*/}` 去前缀，重新预灌。
+
+### B.3 最终拓扑实测
+
+- registry：kind 网络双栈（IPv4 172.20.0.5 / IPv6 fc00:f853:ccd:e793::5），runtime=nvidia（无害，mode=auto 直通）
+- containerd：`NO_PROXY=*` 绕代理直连 registry
+- 端到端拉取耗时：**799ms**（22 MB metrics-server，本地 loopback 等效）

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# 镜像预拉取脚本
-# 用途: 把所有 K8s 组件所需镜像预先拉到本地 Docker，并加载进 kind 节点
-# 设计稿 §4.3
+# 镜像预灌脚本（local registry 方案）
+# 用途: 把所有 K8s 组件所需镜像预先 pull 到本地 Docker，再 push 进 local registry，
+#       kind 节点通过 containerd mirror（hosts.toml）从 local registry 拉取，绕开 docker save。
+# 设计稿: docs/12-local-registry镜像预灌方案.md
 
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-k8s-monitor-dev}"
+REGISTRY="${REGISTRY:-localhost:5001}"
 PULL_LOG="/tmp/k8s-monitor-pull.log"
 LOAD_LOG="/tmp/k8s-monitor-load.log"
 
 # 镜像清单（每次组件升级要更新）
+# 注：kindest/node 是 kind 节点本身镜像，建集群时节点内 containerd 已具备，无需预灌。
 IMAGES=(
-  # kind node image
-  "kindest/node:v1.31.14"
-
   # metrics-server
   "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
 
@@ -87,30 +87,43 @@ if [ ${#failed_images[@]} -gt 0 ]; then
     echo "  - $img"
   done
   echo ""
-  echo "继续执行 kind load（已成功的镜像仍可灌入）"
+  echo "继续执行 push（已成功的镜像仍可推入 registry）"
 fi
 
 echo ""
 echo "==================================="
-echo "Step 2/2: kind load docker-image"
+echo "Step 2/2: push to local registry"
 echo "==================================="
-echo "目标集群: $CLUSTER_NAME"
+echo "registry: $REGISTRY"
 echo "日志: $LOAD_LOG"
 echo ""
 
-if ! kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-  echo "⚠️ 集群 '$CLUSTER_NAME' 不存在，跳过 kind load"
-  echo "（请先执行 Task 5.1 创建集群）"
-  exit 0
+# 前置：local registry 容器必须已起（deploy/local-registry.sh up）
+if ! docker inspect -f '{{.State.Running}}' kind-registry 2>/dev/null | grep -q true; then
+  echo "⚠️ kind-registry 容器未运行，请先执行 deploy/local-registry.sh up"
+  exit 1
 fi
 
 > "$LOAD_LOG"
 for img in "${IMAGES[@]}"; do
-  echo "[load] $img"
-  if kind load docker-image "$img" --name "$CLUSTER_NAME" >> "$LOAD_LOG" 2>&1; then
+  # mirror 语义：containerd 经 hosts.toml mirror 拉取时，请求 path 不含 registry host 段。
+  # 故 push 也必须去掉 registry 前缀，用原 image path（如 registry.k8s.io/a/b → a/b），
+  # 否则 registry 里存的 repo 路径与 containerd mirror 请求路径不匹配 → 404。
+  path="${img#*/}"
+  echo "[push] $img → $REGISTRY/$path"
+  if docker tag "$img" "$REGISTRY/$path" \
+     && docker push "$REGISTRY/$path" >> "$LOAD_LOG" 2>&1; then
     echo "  ✓ done"
   else
-    echo "  ✗ FAILED (see $LOAD_LOG)"
+    # 兜底：本机 docker 存储畸变（多平台 index 无平台 manifest）时 push 报
+    # "does not provide any platform"，用 imagetools create 直接 registry 间拷贝绕过本地存储。
+    echo "  ↻ push 失败，imagetools create 兜底..."
+    if docker buildx imagetools create -t "$REGISTRY/$path" "$img" >> "$LOAD_LOG" 2>&1; then
+      echo "  ✓ done (via imagetools)"
+    else
+      echo "  ✗ FAILED (see $LOAD_LOG)"
+      failed_images+=("$img")
+    fi
   fi
 done
 
@@ -118,5 +131,9 @@ echo ""
 echo "==================================="
 echo "完成"
 echo "==================================="
-echo "已拉取镜像:"
+echo "已拉取镜像(本地 docker):"
 docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'kindest|metrics-server|ingress-nginx|cert-manager|prometheus|grafana|argocd|echo-server|kube-state-metrics|coredns|busybox|redis' | sort
+echo ""
+echo "registry catalog:"
+curl -s "http://${REGISTRY}/v2/_catalog" || true
+echo

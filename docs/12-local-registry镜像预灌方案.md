@@ -107,9 +107,9 @@ registry 是一个**普通 docker 容器**（`registry:3`），和 3 个 kind �
 | 时机 | 谁做什么 | 走哪 |
 |---|---|---|
 | **预灌阶段**（手动跑脚本） | 宿主 `docker pull <原镜像>` → `docker tag localhost:5001/<原 path>` → `docker push` | 宿主 → `localhost:5001` → 存进 `kind-registry` 容器 |
+| **集群运行时**（Pod 起来） | kubelet 让节点 containerd 拉镜像，`hosts.toml` 指路 | 节点 → `kind-registry:5000`（优先，命中即用）/ daocloud（兜底） |
 
 > **关键**：`<原 path>` 是**去掉 registry host 后的路径**（`registry.k8s.io/a/b` → `a/b`）。containerd 经 hosts.toml mirror 拉取时请求路径不含 registry host 段，故 push 必须用同样的去前缀路径，否则 registry 存的 repo 与 mirror 请求不匹配 → 404。
-| **集群运行时**（Pod 起来） | kubelet 让节点 containerd 拉镜像，`hosts.toml` 指路 | 节点 → `kind-registry:5000`（优先，命中即用）/ daocloud（兜底） |
 
 ```
 Pod 拉镜像 registry.k8s.io/.../metrics-server:v0.8.1

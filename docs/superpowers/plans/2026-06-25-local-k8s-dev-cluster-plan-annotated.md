@@ -1078,8 +1078,8 @@ server:
 configs:
   cm:
     application.instanceLabelKey: argocd.argoproj.io/instance
-  secret:
-    argocdServerAdminPassword: "$2a$10$xxxxx"    # 占位，Task 5.6 用真实密码替代
+  # admin 密码：不在 values 里写死（错误的 bcrypt 占位会让 ArgoCD 跳过自动生成、锁死登录）。
+  # 让 chart 自动生成随机密码，安装后用 argocd-initial-admin-secret 取（见 Task 5.6 Step 4）。
 
 # ArgoCD 由多个 Pod 组成:
 controller:                            # 监听 Application CRD，同步 Git → 集群
@@ -1760,11 +1760,11 @@ $ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.p
 > - 把 base64 解码
 > - 输出真实密码（如 `AbCd-1234-EfGh-5678`）
 >
-> ⚠️ **为什么 values.yaml 里的 `argocdServerAdminPassword` 不生效**:
-> - 那是个 bcrypt hash 占位符（`$2a$10$xxxxx`）
-> - 不是真实密码
-> - ArgoCD Helm chart 默认会生成随机密码放到 `argocd-initial-admin-secret`
-> - **正确做法**: 用上面命令取真实密码
+> ⚠️ **为什么不要在 values 里写 `argocdServerAdminPassword`**（2026-07-06 订正）:
+> - ArgoCD 逻辑：**只要 values 提供了 `argocdServerAdminPassword`，它就认为"用户已设定密码"，于是不再自动生成、也不创建 `argocd-initial-admin-secret`**。
+> - 旧版 values 写了个 `$2a$10$xxxxx` 占位 hash → ArgoCD 当真用了 → 既不生成 bootstrap secret、那串 x 又不是任何已知密码 → **登录锁死**。
+> - 而且这版（v3.4.4）启动时不会从空 `argocd-secret` 重建 TLS，删 secret 后新 pod 直接 CrashLoop；要靠 `helm uninstall` + 干净重装才能恢复。
+> - **正确做法**: values 里**不写** `argocdServerAdminPassword`（让 chart 自动生成），用上面命令从 `argocd-initial-admin-secret` 取随机密码。
 
 ---
 

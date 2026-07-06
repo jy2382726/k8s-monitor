@@ -21,10 +21,9 @@ server:
 configs:
   cm:
     application.instanceLabelKey: argocd.argoproj.io/instance
-  # 开发环境：关闭双因素认证、使用 admin/admin123
-  secret:
-    argocdServerAdminPassword: "$2a$10$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    # 占位符，Task 5.6 用 argocd account generate-password 重生成
+  # admin 密码：不在 values 里写死（错误的 bcrypt 占位会让 ArgoCD 跳过自动生成、反而锁死登录）。
+  # 让 chart 自动生成随机密码，安装后用以下命令取：
+  #   kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 
 controller:
   resources:

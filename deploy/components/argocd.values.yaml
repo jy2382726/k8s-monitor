@@ -48,7 +48,13 @@ applicationSet:
 notifications:
   enabled: false                        # 开发环境关闭
 
+dex:
+  enabled: false                        # 开发环境无 SSO，关掉免拉 ghcr.io/dexidp/dex（节点无 mirror + 未预灌 → ImagePullBackOff）
+
 redis:
+  image:
+    repository: docker.io/library/redis # ★ 默认 ecr-public.aws.com/docker/library/redis，节点 certs.d 无此 mirror → 改走 docker.io mirror
+    tag: 8.2.3-alpine                   # chart 10.1.2 默认；8.x 才是开源版 Redis（7.4.x 非开源，已弃）
   resources:
     requests:
       cpu: 50m

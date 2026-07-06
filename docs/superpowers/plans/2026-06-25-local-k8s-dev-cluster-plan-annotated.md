@@ -1018,7 +1018,7 @@ grafana:
   persistence:
     enabled: true
     size: 5Gi                          # Grafana 配置存储
-    storageClassName: local-path       # 用 kind 默认 StorageClass
+    storageClassName: standard         # ★ kind 内置 local-path 的 SC 名叫 standard（不是 local-path）
 
 nodeExporter:
   enabled: true                        # 节点级资源指标（CPU/内存/磁盘）
@@ -1044,10 +1044,11 @@ kubeStateMetrics:
 > - 改为 `false` 让 Prometheus 抓**所有命名空间的所有 ServiceMonitor**
 > - 这样新加监控目标只需创建 ServiceMonitor，无需修改 Prometheus 配置
 >
-> 🔗 **`storageClassName: local-path` 与 kind 默认**:
-> - Grafana 持久化需要 PVC → 找 StorageClass
-> - kind 默认装了 `local-path` StorageClass
-> - 这里显式指定，避免 Helm chart 用默认 StorageClass（可能不存在）
+> 🔗 **`storageClassName: standard` 与 kind 默认**（2026-07-06 订正）:
+> - Grafana 持久化需要 PVC → 要指向一个真实存在的 StorageClass
+> - kind 默认装的 local-path provisioner，其 **StorageClass 名叫 `standard`**（provisioner 字段才是 `rancher.io/local-path`）——不是 `local-path`
+> - 旧版本文档写 `local-path` 是错的，PVC 会一直 `ProvisioningFailed: storageclass "local-path" not found`
+> - `kubectl get sc` 可见：`standard (default)  rancher.io/local-path`
 >
 > 📖 **`NodePort` 类型 Service**:
 > - K8s Service 有 3 种类型: ClusterIP / NodePort / LoadBalancer
@@ -1093,7 +1094,13 @@ applicationSet:                        # ApplicationSet 控制器（批量生成
 notifications:                         # 通知（Slack/邮件）
   enabled: false                       # 开发环境关闭
 
+dex:                                   # SSO/OIDC 组件
+  enabled: false                       # ★ dev 无 SSO，关掉免拉 ghcr.io/dexidp/dex（chart 默认开、未预灌 → ImagePullBackOff）
+
 redis:                                 # ArgoCD 内部缓存
+  image:
+    repository: docker.io/library/redis  # ★ chart 默认 ecr-public.aws.com/docker/library/redis，节点无此 mirror → override 回 docker.io 走 mirror
+    tag: 8.2.3-alpine                     # chart 10.1.2 默认；8.x 才是开源版 Redis（7.4.x 非开源）
   resources: {requests: {cpu: 50m, memory: 64Mi}}
 ```
 
@@ -1171,8 +1178,9 @@ IMAGES=(
   "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
 
   # === ingress-nginx ===
+  # admission webhooks 在 values 里关了（admissionWebhooks.enabled=false），不起 certgen Job，
+  # 所以不需要 kube-webhook-certgen（旧清单里的 v1.5.0 是死库存，已删）。
   "registry.k8s.io/ingress-nginx/controller:v1.15.1"
-  "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0"
 
   # === cert-manager (4 个组件镜像) ===
   "quay.io/jetstack/cert-manager-controller:v1.20.2"
@@ -1181,17 +1189,24 @@ IMAGES=(
   "quay.io/jetstack/cert-manager-startupapicheck:v1.20.2"   # helm 安装时的 startupapicheck 自检 Job
 
   # === kube-prometheus-stack ===
-  "quay.io/prometheus/prometheus:v3.2.1"
-  "quay.io/prometheus/node-exporter:v1.9.0"
-  "quay.io/prometheus-operator/prometheus-operator:v0.82.2"
-  "quay.io/prometheus-operator/prometheus-config-reloader:v0.82.2"
-  "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0"
-  "docker.io/grafana/grafana:11.4.0"
-  "docker.io/library/busybox:1.36"          # Grafana init container
+  # ★ 版本以 `helm get manifest` 实际渲染为准（chart 87.2.1）。旧教学版的 v3.2.1/v0.82.2/11.4.0
+  #   等是更早 chart 的默认，87.2.1 已全面升级；加上 daocloud fallback 已废（坑 3），
+  #   版本必须精确对齐，否则 ImagePullBackOff。
+  "ghcr.io/jkroepke/kube-webhook-certgen:1.8.4"              # admission webhook 证书生成 Job（chart 默认镜像；漏预灌→慢拉超 helm 5m hook 超时→context deadline exceeded）
+  "quay.io/prometheus/prometheus:v3.12.0-distroless"
+  "quay.io/prometheus/node-exporter:v1.11.1-distroless"
+  "quay.io/prometheus-operator/prometheus-operator:v0.92.0"
+  "quay.io/prometheus-operator/prometheus-config-reloader:v0.92.0"
+  "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1"
+  "docker.io/grafana/grafana:13.1.0"
+  "docker.io/library/busybox:1.38.0"                         # Grafana init container（chown 卷权限）
+  "quay.io/kiwigrid/k8s-sidecar:2.8.0"                       # Grafana dashboard sidecar（旧教学版漏列）
 
   # === ArgoCD ===
   "quay.io/argoproj/argocd:v3.4.4"
-  "docker.io/redis:7.4-alpine"              # ArgoCD internal redis
+  # ★ redis：chart 10.1.2 默认源是 ecr-public.aws.com（节点无此 mirror），版本 8.2.3（8.x 才是开源版）。
+  #   values 里 override repository 到 docker.io/library/redis 走 docker.io mirror；预灌用 1ms 当源（坑 4）。
+  "docker.io/library/redis:8.2.3-alpine"
 
   # === 测试应用 ===
   "docker.io/ealen/echo-server:0.9.0"
@@ -1788,7 +1803,7 @@ kind: PersistentVolumeClaim             # ③ 存储申请
 metadata: {name: echo-data, namespace: e2e-test}
 spec:
   accessModes: [ReadWriteOnce]          # 单 Pod 读写
-  storageClassName: local-path          # 用 kind 默认 StorageClass
+  storageClassName: standard            # kind 内置 SC 名（不是 local-path）
   resources: {requests: {storage: 100Mi}}
 ---
 apiVersion: v1
@@ -2114,7 +2129,7 @@ deploy/components/cluster-issuer.yaml
 
 deploy/components/kube-prometheus-stack.values.yaml
   ├── grafana.service.nodePort: 30030      ← 对应 kind-config 映射
-  ├── grafana persistence.storageClassName: local-path
+  ├── grafana persistence.storageClassName: standard   ← kind 内置 SC 名（不是 local-path）
   └── serviceMonitorSelectorNil...: false  ← 抓所有 ServiceMonitor
 
 deploy/components/argocd.values.yaml
@@ -2124,7 +2139,7 @@ deploy/components/argocd.values.yaml
 [测试应用层]
 deploy/verify/test-app.yaml
   ├── Deployment → 引用 PVC echo-data
-  ├── PVC echo-data → storageClassName: local-path
+  ├── PVC echo-data → storageClassName: standard   ← 同上
   ├── Service → selector 匹配 Pod labels
   └── Ingress → ingressClassName: nginx, host: echo.local, backend: echo Service
 ```
@@ -2239,6 +2254,69 @@ set -u                      # 引用未定义变量报错
 set -x                      # 打印每条命令（调试用）
 set -o pipefail             # 管道中任一阶段失败则整条失败
 ```
+
+---
+
+## 踩坑复盘：镜像版本漂移与镜像源（2026-07-06 实战）
+
+> 部署 kps（chart 87.2.1）与 ArgoCD（chart 10.1.2）时踩的坑，记此避免复踩。核心教训：**chart 实际渲染出什么镜像 = 唯一真理，装前必核对；预灌清单与之逐一精确对齐**。
+
+### 坑 1：helm chart 版本 ≠ app 版本
+- `helm install/template --version` 要的是 **chart 版本**，不是镜像 tag 上的 app 版本。
+- 例：ArgoCD chart `argo/argo-cd` **10.1.2** 搭载 app `v3.4.4`（写 `--version 3.4.4` 会 `chart not found`）；kps chart **87.2.1** 搭载 prometheus `v3.12.0`。
+- 查对照：`helm search repo <chart> --versions`（看 CHART VERSION ↔ APP VERSION 两列）。
+
+> 📖 **为什么有两套版本号**:
+> - **chart 版本**：helm chart 包自身的版本（chart 维护者发版，如 argo-cd chart 10.1.2），跟 chart 模板演进绑定。
+> - **app 版本**：chart 里打包的应用（argocd 二进制）版本，跟应用发版绑定。
+> - 二者独立演进：chart 可能改模板（升 chart 版本）但不升 app，反之亦然。所以 `--version` 永远填 chart 版本。
+
+### 坑 2：chart 默认镜像会漂移 + 换源
+- chart 升级时默认镜像版本会跳，甚至换 registry 源；预灌清单若跟旧 chart 写，新 chart 就全面漂移 → ImagePullBackOff。
+- 实踩 kps 87.2.1：实际渲染 prometheus `v3.12.0-distroless` / grafana `13.1.0` / operator `v0.92.0` / config-reloader `v0.92.0` / kube-state-metrics `v2.19.1` / node-exporter `v1.11.1-distroless` / busybox `1.38.0` / certgen `ghcr.io/jkroepke/kube-webhook-certgen:1.8.4` / sidecar `quay.io/kiwigrid/k8s-sidecar:2.8.0`（旧清单是 v3.2.1/11.4.0/v0.82.2/v2.15.0/1.36 且漏 certgen/sidecar）。
+- 实踩 ArgoCD 10.1.2：redis 源从 docker.io 换成 `ecr-public.aws.com/docker/library/redis:8.2.3-alpine`（节点无此 mirror）+ 默认开 dex（`ghcr.io/dexidp/dex:v2.45.1`，未预灌）。
+- **装前必跑**（决定性步骤）：
+  ```bash
+  helm template <rel> <chart> --version <chart版本> -f <values> | grep -iE 'image:' | sort -u
+  ```
+  把渲染出的镜像逐一对 `curl http://localhost:5001/v2/<repo>/tags/list`，版本 + 源(registry host) 全对得上再 `helm install`。漂了就：更新 `deploy/preload-images.sh` + 推镜像（docker.io 用 1ms 当源，见坑 4）+ 必要时 values override 镜像源 / 关掉用不到的组件。已装 chart 核对用 `helm get manifest <rel> -n <ns> | grep -iE 'image:'`。
+
+> 🔗 **镜像源路径细节**（容易错）:
+> - 预灌脚本 push 时去掉 registry host 段（`docker.io/library/redis` → push 成 `localhost:5001/library/redis`），containerd mirror 请求 path 也不含 host，两端对齐。
+> - 官方镜像走 `library/<name>` 命名空间，清单要写全（`docker.io/library/redis`，不是 `docker.io/redis`）。
+> - ingress-nginx controller chart 以 `tag@sha256:<list digest>` pin，必须用 `imagetools create`（保多平台 list digest）而不是 `docker push`（只推单平台 manifest，digest 对不上 → 回源）。
+
+### 坑 3：daocloud 镜像源已废（403）—— mirror fallback 断了
+- 各 `hosts.toml` 里的 fallback 源 `m.daocloud.io` 全线返回 **403 Forbidden**（2026-07-06 实测）。
+- 影响：节点 containerd mirror 链「local registry 未命中 → daocloud」断了 → **预灌清单版本必须 100% 精确**，否则必 ImagePullBackOff（再没有"漏了就回源拉"的兜底）。
+- 连带：certgen 这种 pre-install hook Job 的镜像若漏预灌，慢拉会超 helm 默认 5m hook 超时 → `context deadline exceeded`（易误判为容器失败；实为拉取超时）。
+
+> 📖 **helm hook 超时机制**（解释"为什么 5m26s 拉取会击穿安装"）:
+> - helm 对 hook Job（如 kps 的 admission certgen `pre-install` Job）默认等 **5 分钟**（`--timeout` 默认 `5m0s`）。
+> - 镜像慢拉 5m26s > 5m0s → helm 等不到、放弃 → `context deadline exceeded`，整个 install 失败。
+> - 而 helm 放弃后 Job 自己还在重试到 backoffLimit 耗尽，留下 `BackOff` 事件，容易让人误以为是容器逻辑失败——其实是拉取超时。
+
+### 坑 4：docker.io 走 Clash 被 reset → 用 docker.1ms.run 逃生
+- `registry-1.docker.io` 经 Clash(7890) **被稳定 reset**（`SSL_connect: connection reset by peer`），直连又被 GFW 挡 → host 上 `docker pull docker.io/...` / `imagetools` 直拉 docker.io 必败。
+- **唯一可靠 docker.io 通路**：docker daemon systemd drop-in (`/etc/systemd/system/docker.service.d/http-proxy.conf`) 的 `NO_PROXY` 白名单含 `docker.1ms.run,docker.1panel.live,docker.nju.edu.cn,...`（唯独不含 registry-1.docker.io）→ 这些源走**直连**。预灌 docker.io 镜像用 `docker.1ms.run/<path>` 当 imagetools 源：
+  ```bash
+  docker buildx imagetools create -t localhost:5001/<path> docker.1ms.run/<path>
+  ```
+- **1ms 多平台缺口**：1ms 对某些镜像（如 `library/redis:8.2.3-alpine`）的多平台 list 缺冷门平台 manifest，imagetools 拷全平台会报 `not found`。改单平台：
+  ```bash
+  docker pull docker.1ms.run/<path>          # 只取 amd64
+  docker tag  docker.1ms.run/<path> localhost:5001/<path>
+  docker push localhost:5001/<path>          # chart 按 tag 拉、不 pin digest 时单平台够用
+  ```
+
+> 🔗 **为什么 NO_PROXY 里列镜像源能直连**:
+> - daemon 的 `HTTP_PROXY/HTTPS_PROXY` 把出网流量送给 Clash；但 docker.io（registry-1.docker.io）走的代理节点被 reset。
+> - `NO_PROXY` 白名单里的 `docker.1ms.run` 等国内镜像源，daemon **不送代理、直连**，而这些源在国内可达 → 拉得到。
+> - 所以内网镜像源当 imagetools 的"中转源"：从 1ms 拷到 local registry，节点再从 local registry 拉，全程不依赖 docker.io/Clash。
+
+### 附：registry 删 tag 的「幽灵 tag」坑
+- `DELETE /v2/<name>/manifests/<digest>` 删 manifest 后，`tags/list` 里 tag 链可能残留（幽灵 tag，pull 会 404）。`gc --delete-untagged` 清的是「无 tag 的 manifest」，反过来「指向空 manifest 的 tag 链」它不管。
+- 彻底清：进容器删 tag 目录 `docker exec kind-registry rm -rf /var/lib/registry/docker/registry/v2/repositories/<name>/_manifests/tags/<tag>`（整个 repo 空就连 repo 目录一起删），再 `docker exec kind-registry registry garbage-collect --delete-untagged /etc/distribution/config.yml` 回收孤儿 blob。
 
 ---
 

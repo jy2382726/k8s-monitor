@@ -32,7 +32,7 @@ grafana:
   persistence:
     enabled: true
     size: 5Gi
-    storageClassName: local-path
+    storageClassName: standard       # ★ kind 内置 local-path 的 SC 名叫 standard（provisioner=rancher.io/local-path），不是 local-path
   resources:
     requests:
       cpu: 100m

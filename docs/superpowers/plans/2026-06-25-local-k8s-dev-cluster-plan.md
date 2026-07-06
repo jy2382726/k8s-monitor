@@ -943,7 +943,7 @@ grafana:
   persistence:
     enabled: true
     size: 5Gi
-    storageClassName: local-path
+    storageClassName: standard       # ★ kind 内置 local-path 的 SC 名叫 standard（provisioner=rancher.io/local-path），不是 local-path
   resources:
     requests:
       cpu: 100m
@@ -1019,7 +1019,13 @@ applicationSet:
 notifications:
   enabled: false                        # 开发环境关闭
 
+dex:
+  enabled: false                        # 开发环境无 SSO，关掉免拉 ghcr.io/dexidp/dex（节点无 mirror + 未预灌 → ImagePullBackOff）
+
 redis:
+  image:
+    repository: docker.io/library/redis # ★ 默认 ecr-public.aws.com/docker/library/redis，节点 certs.d 无此 mirror → 改走 docker.io mirror
+    tag: 8.2.3-alpine                   # chart 10.1.2 默认；8.x 才是开源版 Redis（7.4.x 非开源，已弃）
   resources:
     requests:
       cpu: 50m
@@ -1045,7 +1051,7 @@ $ for f in *.yaml; do
 > 实际脚本已在仓库 `deploy/preload-images.sh`：pull + **`docker buildx imagetools create` 为主**（保留多平台 list digest，chart 以 `tag@sha256:<list digest>` pin 时才能命中）+ `docker push` 兜底。
 > 另需配套：`deploy/local-registry.sh`（registry 容器 up/down/status）、`deploy/containerd-certs.d/localhost:5001/hosts.toml`（自研镜像留路）、4 个上游 `hosts.toml` 加 `kind-registry:5000` 首 host。
 > 完整改动清单按 `docs/12` §7。
-> ⚠️ 下面旧脚本里的 `IMAGES` 数组也以仓库实际脚本为准（实际已移除 `kindest/node`，各组件 tag 也已更新）；此处保留的是 2026-06-25 初版，仅供理解原 kind load 方案。
+> ⚠️ 下面 `IMAGES` 数组已与 `deploy/preload-images.sh` 同步（2026-07-06 对齐 chart 实际渲染版本：kps 全面升版 + 补 sidecar/certgen + redis 8.2.3 + 移除未用的 ingress certgen）。仓库脚本为单一真理源，升级组件时改脚本、此处随之同步；原 kind load 初版见 git 历史。
 
 **完成标志**: `deploy/preload-images.sh` 文件存在、可执行。
 
@@ -1068,17 +1074,13 @@ CLUSTER_NAME="${CLUSTER_NAME:-k8s-monitor-dev}"
 PULL_LOG="/tmp/k8s-monitor-pull.log"
 LOAD_LOG="/tmp/k8s-monitor-load.log"
 
-# 镜像清单（每次组件升级要更新）
+# 镜像清单（每次组件升级要更新；以 deploy/preload-images.sh 为单一真理源，此处同步）
 IMAGES=(
-  # kind node image
-  "kindest/node:v1.31.14"
-
   # metrics-server
   "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
 
-  # ingress-nginx
+  # ingress-nginx（admission webhooks 在 values 里关了，不起 certgen Job，不需要 kube-webhook-certgen）
   "registry.k8s.io/ingress-nginx/controller:v1.15.1"
-  "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0"
 
   # cert-manager
   "quay.io/jetstack/cert-manager-controller:v1.20.2"
@@ -1086,18 +1088,20 @@ IMAGES=(
   "quay.io/jetstack/cert-manager-cainjector:v1.20.2"
   "quay.io/jetstack/cert-manager-startupapicheck:v1.20.2"   # helm 安装时的 startupapicheck 自检 Job
 
-  # kube-prometheus-stack (版本以 chart 87.2.1 默认为准)
-  "quay.io/prometheus/prometheus:v3.2.1"
-  "quay.io/prometheus/node-exporter:v1.9.0"
-  "quay.io/prometheus-operator/prometheus-operator:v0.82.2"
-  "quay.io/prometheus-operator/prometheus-config-reloader:v0.82.2"
-  "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0"
-  "docker.io/grafana/grafana:11.4.0"
-  "docker.io/library/busybox:1.36"                  # Grafana init container
+  # kube-prometheus-stack —— 版本以 `helm get manifest` 实际渲染为准（chart 87.2.1）
+  "ghcr.io/jkroepke/kube-webhook-certgen:1.8.4"     # admission webhook 证书生成 Job（chart 默认镜像）
+  "quay.io/prometheus/prometheus:v3.12.0-distroless"
+  "quay.io/prometheus/node-exporter:v1.11.1-distroless"
+  "quay.io/prometheus-operator/prometheus-operator:v0.92.0"
+  "quay.io/prometheus-operator/prometheus-config-reloader:v0.92.0"
+  "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1"
+  "docker.io/grafana/grafana:13.1.0"
+  "docker.io/library/busybox:1.38.0"                 # Grafana init container（chown 卷权限）
+  "quay.io/kiwigrid/k8s-sidecar:2.8.0"               # Grafana dashboard sidecar
 
   # ArgoCD
   "quay.io/argoproj/argocd:v3.4.4"
-  "docker.io/redis:7.4-alpine"                       # ArgoCD internal redis
+  "docker.io/library/redis:8.2.3-alpine"             # ArgoCD internal redis（chart 10.1.2 默认；8.x 开源版；走 docker.io mirror）
 
   # 测试应用
   "docker.io/ealen/echo-server:0.9.0"
@@ -1675,7 +1679,7 @@ $ cd /root/projects/k8s-monitor
 $ helm install argocd argo/argo-cd \
     --namespace argocd --create-namespace \
     --values deploy/components/argocd.values.yaml \
-    --version 3.4.4
+    --version 10.1.2  # ★ chart 版本（非 app 版本 v3.4.4）；argo-cd chart 10.1.2 搭载 argocd v3.4.4
 ```
 
 - [ ] **Step 3: 等 Pod Ready**
@@ -1787,7 +1791,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: local-path
+  storageClassName: standard       # kind 内置 SC 名（不是 local-path）
   resources:
     requests:
       storage: 100Mi
@@ -1849,7 +1853,7 @@ $ kubectl -n e2e-test get pvc
 预期输出:
 ```
 NAME        STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
-echo-data   Bound    pvc-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   100Mi      RWO            local-path     1m
+echo-data   Bound    pvc-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   100Mi      RWO            standard       1m
 ```
 
 STATUS 必须是 Bound。
@@ -2594,7 +2598,7 @@ $ for f in /root/projects/k8s-monitor/deploy/uninstall/step*.sh; do
   kubectl get pv
   ```
 - **解决**:
-  - StorageClass 应有 `local-path`（kind 默认带）
+  - StorageClass 应有 `standard`（kind 默认带的 local-path provisioner，其 SC 名为 `standard` 而非 `local-path`）
   - 容量超过节点可用磁盘时，调小请求
 
 ### 现象: Ingress 配置但 404
@@ -2790,3 +2794,46 @@ kubectl top pods -A
 | echo-server | http://echo.local | 无 |
 | Prometheus | port-forward 9090 | 无 |
 | Kubernetes API | `kubectl` (context 已配) | 无 |
+
+---
+
+## 踩坑复盘：镜像版本漂移与镜像源（2026-07-06 实战）
+
+> 部署 kps（chart 87.2.1）与 ArgoCD（chart 10.1.2）时踩的坑，记此避免复踩。核心教训：**chart 实际渲染出什么镜像 = 唯一真理，装前必核对；预灌清单与之逐一精确对齐**。
+
+### 坑 1：helm chart 版本 ≠ app 版本
+- `helm install/template --version` 要的是 **chart 版本**，不是镜像 tag 上的 app 版本。
+- 例：ArgoCD chart `argo/argo-cd` **10.1.2** 搭载 app `v3.4.4`（写 `--version 3.4.4` 会 `chart not found`）；kps chart **87.2.1** 搭载 prometheus `v3.12.0`。
+- 查对照：`helm search repo <chart> --versions`（看 CHART VERSION ↔ APP VERSION 两列）。
+
+### 坑 2：chart 默认镜像会漂移 + 换源
+- chart 升级时默认镜像版本会跳，甚至换 registry 源；预灌清单若跟旧 chart 写，新 chart 就全面漂移 → ImagePullBackOff。
+- 实踩 kps 87.2.1：实际渲染 prometheus `v3.12.0-distroless` / grafana `13.1.0` / operator `v0.92.0` / config-reloader `v0.92.0` / kube-state-metrics `v2.19.1` / node-exporter `v1.11.1-distroless` / busybox `1.38.0` / certgen `ghcr.io/jkroepke/kube-webhook-certgen:1.8.4` / sidecar `quay.io/kiwigrid/k8s-sidecar:2.8.0`（旧清单是 v3.2.1/11.4.0/v0.82.2/v2.15.0/1.36 且漏 certgen/sidecar）。
+- 实踩 ArgoCD 10.1.2：redis 源从 docker.io 换成 `ecr-public.aws.com/docker/library/redis:8.2.3-alpine`（节点无此 mirror）+ 默认开 dex（`ghcr.io/dexidp/dex:v2.45.1`，未预灌）。
+- **装前必跑**（决定性步骤）：
+  ```bash
+  helm template <rel> <chart> --version <chart版本> -f <values> | grep -iE 'image:' | sort -u
+  ```
+  把渲染出的镜像逐一对 `curl http://localhost:5001/v2/<repo>/tags/list`，版本 + 源(registry host) 全对得上再 `helm install`。漂了就：更新 `deploy/preload-images.sh` + 推镜像（docker.io 用 1ms 当源，见坑 4）+ 必要时 values override 镜像源 / 关掉用不到的组件。已装 chart 核对用 `helm get manifest <rel> -n <ns> | grep -iE 'image:'`。
+
+### 坑 3：daocloud 镜像源已废（403）—— mirror fallback 断了
+- 各 `hosts.toml` 里的 fallback 源 `m.daocloud.io` 全线返回 **403 Forbidden**（2026-07-06 实测）。
+- 影响：节点 containerd mirror 链「local registry 未命中 → daocloud」断了 → **预灌清单版本必须 100% 精确**，否则必 ImagePullBackOff（再没有"漏了就回源拉"的兜底）。
+- 连带：certgen 这种 pre-install hook Job 的镜像若漏预灌，慢拉会超 helm 默认 5m hook 超时 → `context deadline exceeded`（易误判为容器失败；实为拉取超时）。
+
+### 坑 4：docker.io 走 Clash 被 reset → 用 docker.1ms.run 逃生
+- `registry-1.docker.io` 经 Clash(7890) **被稳定 reset**（`SSL_connect: connection reset by peer`），直连又被 GFW 挡 → host 上 `docker pull docker.io/...` / `imagetools` 直拉 docker.io 必败。
+- **唯一可靠 docker.io 通路**：docker daemon systemd drop-in (`/etc/systemd/system/docker.service.d/http-proxy.conf`) 的 `NO_PROXY` 白名单含 `docker.1ms.run,docker.1panel.live,docker.nju.edu.cn,...`（唯独不含 registry-1.docker.io）→ 这些源走**直连**。预灌 docker.io 镜像用 `docker.1ms.run/<path>` 当 imagetools 源：
+  ```bash
+  docker buildx imagetools create -t localhost:5001/<path> docker.1ms.run/<path>
+  ```
+- **1ms 多平台缺口**：1ms 对某些镜像（如 `library/redis:8.2.3-alpine`）的多平台 list 缺冷门平台 manifest，imagetools 拷全平台会报 `not found`。改单平台：
+  ```bash
+  docker pull docker.1ms.run/<path>          # 只取 amd64
+  docker tag  docker.1ms.run/<path> localhost:5001/<path>
+  docker push localhost:5001/<path>          # chart 按 tag 拉、不 pin digest 时单平台够用
+  ```
+
+### 附：registry 删 tag 的「幽灵 tag」坑
+- `DELETE /v2/<name>/manifests/<digest>` 删 manifest 后，`tags/list` 里 tag 链可能残留（幽灵 tag，pull 会 404）。`gc --delete-untagged` 清的是「无 tag 的 manifest」，反过来「指向空 manifest 的 tag 链」它不管。
+- 彻底清：进容器删 tag 目录 `docker exec kind-registry rm -rf /var/lib/registry/docker/registry/v2/repositories/<name>/_manifests/tags/<tag>`（整个 repo 空就连 repo 目录一起删），再 `docker exec kind-registry registry garbage-collect --delete-untagged /etc/distribution/config.yml` 回收孤儿 blob。

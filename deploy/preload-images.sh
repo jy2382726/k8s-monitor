@@ -17,9 +17,9 @@ IMAGES=(
   # metrics-server
   "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
 
-  # ingress-nginx
+  # ingress-nginx（values 里 admissionWebhooks.enabled=false，不起 certgen Job，不需要 kube-webhook-certgen；
+  # 若以后开启 ingress 准入 webhook，再把 "registry.k8s.io/ingress-nginx/kube-webhook-certgen" 加回来）
   "registry.k8s.io/ingress-nginx/controller:v1.15.1"
-  "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.5.0"
 
   # cert-manager
   "quay.io/jetstack/cert-manager-controller:v1.20.2"
@@ -27,18 +27,22 @@ IMAGES=(
   "quay.io/jetstack/cert-manager-cainjector:v1.20.2"
   "quay.io/jetstack/cert-manager-startupapicheck:v1.20.2"   # helm 安装时的 startupapicheck 自检 Job
 
-  # kube-prometheus-stack (版本以 chart 87.2.1 默认为准)
-  "quay.io/prometheus/prometheus:v3.2.1"
-  "quay.io/prometheus/node-exporter:v1.9.0"
-  "quay.io/prometheus-operator/prometheus-operator:v0.82.2"
-  "quay.io/prometheus-operator/prometheus-config-reloader:v0.82.2"
-  "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0"
-  "docker.io/grafana/grafana:11.4.0"
-  "docker.io/library/busybox:1.36"                  # Grafana init container
+  # kube-prometheus-stack —— 版本以 `helm get manifest` 实际渲染为准（chart 87.2.1）。
+  # 旧清单写的 v3.2.1 / v0.82.2 / 11.4.0 等是更早 chart 的默认值，87.2.1 已全面升级；
+  # 加上 daocloud 镜像源已失效（回源 403），版本必须逐一精确对齐，否则 ImagePullBackOff。
+  "ghcr.io/jkroepke/kube-webhook-certgen:1.8.4"     # admission webhook 证书生成 Job（chart 默认）
+  "quay.io/prometheus/prometheus:v3.12.0-distroless"
+  "quay.io/prometheus/node-exporter:v1.11.1-distroless"
+  "quay.io/prometheus-operator/prometheus-operator:v0.92.0"
+  "quay.io/prometheus-operator/prometheus-config-reloader:v0.92.0"
+  "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1"
+  "docker.io/grafana/grafana:13.1.0"
+  "docker.io/library/busybox:1.38.0"                 # Grafana init container（chown 卷权限）
+  "quay.io/kiwigrid/k8s-sidecar:2.8.0"               # Grafana dashboard sidecar（旧清单漏列）
 
   # ArgoCD
   "quay.io/argoproj/argocd:v3.4.4"
-  "docker.io/redis:7.4-alpine"                       # ArgoCD internal redis
+  "docker.io/library/redis:8.2.3-alpine"             # ArgoCD internal redis（chart 10.1.2 默认；8.x 开源版；走 docker.io mirror）
 
   # 测试应用
   "docker.io/ealen/echo-server:0.9.0"

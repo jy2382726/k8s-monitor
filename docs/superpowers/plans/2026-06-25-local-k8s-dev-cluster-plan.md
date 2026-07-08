@@ -940,6 +940,13 @@ grafana:
   service:
     type: NodePort
     nodePort: 30030
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    # ★ grafana subchart (chart 12.7.1) 的 hosts 是「字符串列表」，元素直接是 host 名（不是 {host: xxx} 对象）。
+    # 实测确认（helm template）：hosts[0]=grafana.local 能正确渲染进 .spec.rules[].host。
+    hosts:
+      - grafana.local
   persistence:
     enabled: true
     size: 5Gi
@@ -979,11 +986,10 @@ server:
   ingress:
     enabled: true
     ingressClassName: nginx
-    hosts:
-      - host: argocd.local
-        paths:
-          - path: /
-            pathType: Prefix
+    # ★ chart v10.1.2 认的字段是 `hostname`（单值字符串），不是 `hosts`（列表）。
+    # 旧版用 hosts[].host 列表写法，chart 会静默忽略、回退默认 argocd.example.com → Ingress host 不匹配 → 浏览器 404。
+    # 实测确认（helm template）：只有 hostname 字段能渲染进 .spec.rules[].host。
+    hostname: argocd.local
   resources:
     requests:
       cpu: 100m
@@ -995,6 +1001,10 @@ configs:
   # admin 密码：不在 values 里写死（错误的 bcrypt 占位会让 ArgoCD 跳过自动生成、反而锁死登录）。
   # 让 chart 自动生成随机密码，安装后用以下命令取：
   #   kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+  params:
+    server.insecure: "true"   # ★ 开发环境让 argocd-server 走 HTTP，SSL 在 ingress-nginx 终止。
+                              # 否则 argocd 默认 HTTPS(443)，经 http Ingress 访问会被 307 重定向到 https → 浏览器失败。
+                              # 见 chart 安装提示的 "Option 2: terminate SSL at your ingress"。
 
 controller:
   resources:
@@ -1872,6 +1882,20 @@ Add-Content "C:\Windows\System32\drivers\etc\hosts" "`n127.0.0.1  echo.local arg
 127.0.0.1  prometheus.local
 ```
 
+> ⚠️ **hosts 配了不代表浏览器能访问（2026-07-08 实战踩坑）**:
+> - Windows 上若开了 Clash **系统代理**，浏览器（Edge/Chrome 继承系统代理）会把 `*.local` 请求也送进 Clash → Clash 不认识 `.local` 域名 → 返回 **502 错误的网关**。
+> - 而 WSL 内或 Windows 的 `curl.exe`（默认不走系统代理）→ 返回 200。这个"curl 通但浏览器 502"的巨大反差极易误导排查方向。
+> - **必须**在 Clash 的"绕过域"（bypass）里加：
+>   ```
+>   localhost
+>   127.0.0.1
+>   *.local
+>   echo.local
+>   argocd.local
+>   grafana.local
+>   ```
+>   否则浏览器永远 502。详见 Task 6.2 Step 3 的排查清单。
+
 ---
 
 ### Task 6.2: 端到端验证
@@ -1889,18 +1913,26 @@ $ curl -sS -H "Host: echo.local" http://localhost/ | python3 -m json.tool | head
 预期输出（echo-server 返回请求 JSON）:
 ```json
 {
-  "method": "GET",
-  "path": "/",
-  "query": {},
-  "headers": {
-    "host": "echo.local",
-    "user-agent": "curl/...",
-    "accept": "*/*",
+  "http": {
+    "method": "GET",
+    "originalUrl": "/",
+    "protocol": "http"
+  },
+  "request": {
+    "headers": {
+      "host": "echo.local",
+      "user-agent": "curl/...",
+      "accept": "*/*",
+      ...
+    },
+    "query": {},
     ...
   },
   ...
 }
 ```
+
+> **字段说明**: ealen/echo-server 把请求路径放在 `http.originalUrl`（不是顶层 `path`——那是另一个 echo 镜像的 schema，混用会导致 `d.get('path')` 永远返回 `None`）。后续验证命令都从 `http.originalUrl` 取路径。
 
 - [ ] **Step 2: 验证 Ingress path rewrite**
 
@@ -1908,15 +1940,17 @@ $ curl -sS -H "Host: echo.local" http://localhost/ | python3 -m json.tool | head
 $ curl -sS -H "Host: echo.local" http://localhost/api/users | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-print('path:', d.get('path'))
+print('path:', d.get('http', {}).get('originalUrl'))
 "
 ```
 
-预期: `path: /api/users`（看 ingress rewrite-target 注解实际行为）
+预期: `path: /api/users`
+
+> **rewrite 实际行为**: 本 Ingress 用 `path: /` + `pathType: Prefix` 且无 capture group，`nginx.ingress.kubernetes.io/rewrite-target: /` 注解实为 **no-op**——请求原样透传，`/api/users` 原样到达后端、`originalUrl` 不变。要真正验证 rewrite 生效，需把 path 改成带 capture 的形式（如 `/api(/|$)(.*)` + `use-regex: "true"`，rewrite-target `/$2`）。
 
 - [ ] **Step 3: 浏览器访问所有入口**
 
-打开 Windows 浏览器，访问以下地址（**均应能打开**）:
+打开 Windows 浏览器，访问以下地址（**均应能打开**，地址栏务必带 `http://` 前缀，避免浏览器强升 HTTPS）:
 
 | URL | 预期页面 |
 |---|---|
@@ -1925,6 +1959,33 @@ print('path:', d.get('path'))
 | http://echo.local | echo-server 返回 JSON（浏览器可能下载而非显示） |
 | http://argocd.local | 同 30080（经 Ingress） |
 | http://grafana.local | 同 30030（经 Ingress） |
+
+> ⚠️ **浏览器访问不通的排查清单（2026-07-08 实战，按可能性排序）**:
+>
+> **诊断第一步：先分清"哪一侧不通"**。在 Windows PowerShell 跑：
+> ```powershell
+> # ★ 必须用 curl.exe（真 curl），不能只用 curl（PowerShell 里是 Invoke-WebRequest 别名，行为完全不同）
+> curl.exe http://echo.local
+> ```
+> - `curl.exe` 返回 200 → 网络链路 OK，问题在浏览器侧（继续往下查）
+> - `curl.exe` 也 502/超时 → 集群或 Windows hosts 问题（回查 `kubectl get pod -A`、hosts 文件）
+>
+> **坑 A（最常见）：Clash 系统代理拦截 → 浏览器 502**
+> - 现象：`curl.exe` 通（200），但 Edge/Chrome 显示 **HTTP ERROR 502** + 地址栏左侧"不安全"标记。
+> - 根因：浏览器继承 Windows 系统代理，把 `*.local` 请求送进 Clash；Clash 不认识 `.local` 域名 → 返回 502。而 `curl.exe` 默认不走系统代理 → 直连成功。这个"curl 通浏览器不通"的反差极易误判为集群故障。
+> - 修复：Clash 客户端 → "绕过域"（bypass）里加 `localhost`、`127.0.0.1`、`*.local`、`echo.local`、`argocd.local`、`grafana.local`（见 Task 6.1 Step 5 末尾）。
+>
+> **坑 B：PowerShell 的 `curl` 不是 curl**
+> - 现象：`curl -H "Host: echo.local" ...` 报 `无法绑定参数"Headers"`。
+> - 根因：PowerShell 里 `curl` 是 `Invoke-WebRequest` 的别名，不支持 curl 的 `-H "K: V"` 语法。
+> - 修复：用 `curl.exe`（真 curl），或 PowerShell 原生语法 `Invoke-WebRequest -Uri ... -Headers @{Host="..."}`。
+>
+> **坑 C：浏览器强升 HTTPS**
+> - 现象：输入 `echo.local` 回车后地址栏变成 `https://echo.local`，报连接拒绝。
+> - 修复：地址栏完整输入 `http://echo.local`（带前缀）；或 Edge/Chrome 关 `edge://settings/privacy` → "安全性" → 关"始终使用安全连接"。
+>
+> **坑 D：DNS 缓存**
+> - `ipconfig /flushdns` + 完全重启浏览器（退出进程，不是关标签页）。
 
 - [ ] **Step 4: Grafana 验证 Prometheus 数据源**
 
@@ -2832,6 +2893,25 @@ kubectl top pods -A
   docker tag  docker.1ms.run/<path> localhost:5001/<path>
   docker push localhost:5001/<path>          # chart 按 tag 拉、不 pin digest 时单平台够用
   ```
+
+### 坑 5：Helm chart values 字段名写错 → 静默失效（2026-07-08 实战）
+- **现象**：浏览器访问 `argocd.local` / `grafana.local` 全 404，但 `echo.local` 正常（200）。
+- **根因**：chart 对 ingress 的 host 字段名有**自己的约定**，套用别的 chart 的写法会被静默忽略，回退默认值：
+  - argocd chart **v10.1.2**：认 `server.ingress.hostname`（单值字符串），**不认** `server.ingress.hosts[].host`（列表）。后者被忽略 → host 回退 `argocd.example.com` → 不匹配 `argocd.local` → 404。
+  - grafana subchart（kps 12.7.1）：`grafana.ingress.hosts` 是**字符串列表**（`- grafana.local`），元素直接是 host 名；不是 `{host: xxx}` 对象。写错结构同样静默失效。
+- **连带的 argocd HTTPS 陷阱**：即便 host 修对了，argocd-server 默认 HTTPS(443)，经 http Ingress 访问会被 **307 重定向到 https** → 浏览器跳到 https 后无证书/端口不通 → 失败。修复：`configs.params."server.insecure": "true"` 让 server 走 HTTP（开发环境），SSL 在 ingress-nginx 终止。见 chart 安装提示的 "Option 2: terminate SSL at your ingress"。
+- **为什么 echo 没事**：echo Ingress 是手写 yaml 直接 apply 的（`deploy/verify/test-app.yaml`），用 K8s 原生 `.spec.rules[].host`，无 chart 模板中间层 → 写什么是什么。**chart 渲染 vs 原生 manifest，字段名约定不同，这是 Helm 的固有陷阱**。
+- **决定性诊断步骤**（遇到"Ingress 404 / host 不对"先跑这个）：
+  ```bash
+  # 1. 看实际部署的 Ingress host 是什么（vs 你以为的）
+  kubectl get ingress -A   # HOSTS 列
+  # 2. 看你传给 helm 的 values（helm get values 是原样回显，不代表 chart 认了）
+  helm get values <rel> -n <ns> | grep -A5 ingress
+  # 3. 看 chart 实际渲染出的 host（这才是真相）
+  helm get manifest <rel> -n <ns> | grep -A3 'kind: Ingress' | grep host
+  # 4. 第 2 步和第 3 步对不上 → 字段名写错，chart 没认你的值
+  ```
+- **修复**：用 chart 认的字段名重写 values，`helm upgrade` 应用。**装前用 `helm template ... --set <字段>=<测试值> | grep host` 实测字段名**最稳（别凭推断/抄旧文档）。
 
 ### 附：registry 删 tag 的「幽灵 tag」坑
 - `DELETE /v2/<name>/manifests/<digest>` 删 manifest 后，`tags/list` 里 tag 链可能残留（幽灵 tag，pull 会 404）。`gc --delete-untagged` 清的是「无 tag 的 manifest」，反过来「指向空 manifest 的 tag 链」它不管。

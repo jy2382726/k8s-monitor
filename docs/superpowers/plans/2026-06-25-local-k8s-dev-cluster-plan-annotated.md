@@ -615,8 +615,8 @@ $ mkdir -p deploy/containerd-certs.d/{docker.io,registry.k8s.io,ghcr.io,quay.io}
 ```
 deploy/
 ├── kind-config.yaml              # kind 集群定义
-├── cluster-create.sh             # 一键创建脚本（未来）
 ├── preload-images.sh             # 镜像预拉取脚本
+├── local-registry.sh             # 本地 registry 容器管理（方案 C，见 docs/12）
 ├── containerd-no-proxy.conf      # ★ 节点内 containerd 绕过死代理（Task 3.1）
 ├── containerd-certs.d/           # ★ containerd v2 镜像加速配置（Task 3.1）
 │   ├── docker.io/hosts.toml
@@ -1015,6 +1015,12 @@ grafana:
   service:
     type: NodePort                     # ★ 用 NodePort 暴露
     nodePort: 30030                    # 对应 kind-config 的 30030 映射
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    # ★ grafana subchart 的 hosts 是「字符串列表」（元素直接是 host 名），不是 {host: xxx} 对象。
+    hosts:
+      - grafana.local                  # ★ 配合 Windows hosts 文件
   persistence:
     enabled: true
     size: 5Gi                          # Grafana 配置存储
@@ -1069,17 +1075,18 @@ server:
   ingress:
     enabled: true
     ingressClassName: nginx            # ★ 引用 ingress-nginx 创建的 IngressClass
-    hosts:
-      - host: argocd.local             # ★ 配合 Windows hosts 文件
-        paths:
-          - path: /
-            pathType: Prefix
+    # ★ chart v10.1.2 认 `hostname`（单值字符串），不认 `hosts`（列表）。
+    # 旧写法 hosts[].host 会被静默忽略 → 回退默认 argocd.example.com → 浏览器 404。
+    hostname: argocd.local             # ★ 配合 Windows hosts 文件
 
 configs:
   cm:
     application.instanceLabelKey: argocd.argoproj.io/instance
   # admin 密码：不在 values 里写死（错误的 bcrypt 占位会让 ArgoCD 跳过自动生成、锁死登录）。
   # 让 chart 自动生成随机密码，安装后用 argocd-initial-admin-secret 取（见 Task 5.6 Step 4）。
+  params:
+    server.insecure: "true"            # ★ 开发环境 argocd-server 走 HTTP（SSL 在 ingress 终止）。
+                                       # 否则默认 HTTPS，经 http Ingress 访问被 307 重定向到 https → 浏览器失败。
 
 # ArgoCD 由多个 Pod 组成:
 controller:                            # 监听 Application CRD，同步 Git → 集群
@@ -1888,6 +1895,17 @@ Add-Content "C:\Windows\System32\drivers\etc\hosts" "`n127.0.0.1  echo.local"
 > - echo.local 不是真实公网域名
 > - 必须告诉操作系统"echo.local 解析到 127.0.0.1"
 > - 否则浏览器查询 DNS 失败
+>
+> ⚠️ **hosts 配了 ≠ 浏览器能访问（2026-07-08 实战踩坑，必须看）**:
+> - Windows 开了 Clash **系统代理**时，浏览器（Edge/Chrome 继承系统代理）会把 `*.local` 请求也送进 Clash → Clash 不认识 `.local` → 返回 **502**。
+> - 而 `curl.exe`（默认不走系统代理）→ 200。这个"curl 通但浏览器 502"的反差**极易误判为集群故障**（实测就踩了，排查绕了一大圈）。
+> - **必须**在 Clash 的"绕过域"（bypass）里加 `localhost`、`127.0.0.1`、`*.local`、`echo.local`、`argocd.local`、`grafana.local`。
+>
+> 📖 **为什么 curl 通而浏览器不通（理解系统代理）**:
+> - Windows 的"系统代理"是 IE/Edge/Chrome 共享的设置（注册表 `Internet Settings`）。
+> - 浏览器走系统代理 → 请求先送给 Clash → Clash 按规则路由。
+> - `curl.exe` 默认读 `HTTP_PROXY` 环境变量，**不读系统代理注册表** → 直连。
+> - 所以两者走完全不同的网络路径，结果可能天差地别。排查"浏览器不通"时，**永远先确认是否走了代理**。
 
 ---
 
@@ -1905,6 +1923,59 @@ $ curl -sS -H "Host: echo.local" http://localhost/ | python3 -m json.tool
 > - curl 默认填 URL 的域名（这里是 `localhost`）
 > - 我们用 `-H` 强制改为 `echo.local`
 > - **意义**: 模拟浏览器访问 echo.local 的请求
+
+> 📖 **ealen/echo-server 的 JSON schema**（关键!曾经写错命令导致 `path: None`）:
+>
+> 返回结构（节选）:
+> ```json
+> {
+>   "http": {
+>     "method": "GET",
+>     "originalUrl": "/",
+>     "protocol": "http"
+>   },
+>   "request": { "headers": {...}, ... }
+> }
+> ```
+> - 请求路径在 **`http.originalUrl`**，不是顶层 `path`。
+> - 顶层 `path` 是另一个 echo 镜像（如 jmalloc/echo-server）的 schema——混用会让 `d.get('path')` 永远返回 `None`。
+
+> ⚠️ **浏览器访问 `.local` 域名不通的排查清单（2026-07-08 实战，极易踩）**:
+>
+> **诊断第一步：分清哪一侧不通**。Windows PowerShell 跑：
+> ```powershell
+> # ★ 必须 curl.exe（真 curl）；PowerShell 的 curl 是 Invoke-WebRequest 别名，行为不同
+> curl.exe http://echo.local
+> ```
+> - 返回 200 → 网络链路 OK，问题在浏览器侧
+> - 也 502/超时 → 集群或 hosts 问题
+>
+> **坑 A（最常见）：Clash 系统代理 → 浏览器 502**
+> - 现象：`curl.exe` 200，但 Edge/Chrome 显示 **HTTP ERROR 502** + 地址栏左侧"不安全"。
+> - 根因：浏览器继承 Windows 系统代理，把 `*.local` 送进 Clash，Clash 不认识 → 502。`curl.exe` 默认不走系统代理 → 直连成功。
+> - 修复：Clash → "绕过域"加 `localhost`、`127.0.0.1`、`*.local`、`echo.local`、`argocd.local`、`grafana.local`。
+>
+> **坑 B：PowerShell 的 `curl` 不是 curl**
+> - `curl -H "Host:..."` 报"无法绑定参数"→ 因为它是 `Invoke-WebRequest` 别名。用 `curl.exe`。
+>
+> **坑 C：浏览器强升 HTTPS** → 地址栏带 `http://` 前缀输入。
+> **坑 D：DNS 缓存** → `ipconfig /flushdns` + 重启浏览器。
+
+#### Step 2: 验证 Ingress path 透传
+
+```bash
+$ curl -sS -H "Host: echo.local" http://localhost/api/users | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print('path:', d.get('http', {}).get('originalUrl'))
+"
+```
+
+预期: `path: /api/users`
+
+> ⚠️ **取字段别写错**: 误写成 `d.get('path')` 会得到 `None`（见 Step 1 schema 说明）。正确是从 `http.originalUrl` 取。
+>
+> 🔗 **rewrite 注解的实际行为（no-op）**: 本 Ingress 用 `path: /` + `pathType: Prefix` 且无 capture group，`nginx.ingress.kubernetes.io/rewrite-target: /` 注解实为 **no-op**——请求原样透传，`/api/users` 原样到达后端、`originalUrl` 不变。要真正验证 rewrite 生效，需把 path 改成带 capture 的形式（如 `/api(/|$)(.*)` + `use-regex: "true"`，rewrite-target `/$2`）。
 
 #### Step 4-5: Grafana 验证
 
@@ -2313,6 +2384,33 @@ set -o pipefail             # 管道中任一阶段失败则整条失败
 > - daemon 的 `HTTP_PROXY/HTTPS_PROXY` 把出网流量送给 Clash；但 docker.io（registry-1.docker.io）走的代理节点被 reset。
 > - `NO_PROXY` 白名单里的 `docker.1ms.run` 等国内镜像源，daemon **不送代理、直连**，而这些源在国内可达 → 拉得到。
 > - 所以内网镜像源当 imagetools 的"中转源"：从 1ms 拷到 local registry，节点再从 local registry 拉，全程不依赖 docker.io/Clash。
+
+### 坑 5：Helm chart values 字段名写错 → 静默失效（2026-07-08 实战）
+- **现象**：浏览器访问 `argocd.local` / `grafana.local` 全 404，但 `echo.local` 正常（200）。
+- **根因**：chart 对 ingress 的 host 字段名有**自己的约定**，套用别的 chart 的写法会被静默忽略，回退默认值：
+  - argocd chart **v10.1.2**：认 `server.ingress.hostname`（单值字符串），**不认** `server.ingress.hosts[].host`（列表）。后者被忽略 → host 回退 `argocd.example.com` → 不匹配 `argocd.local` → 404。
+  - grafana subchart（kps 12.7.1）：`grafana.ingress.hosts` 是**字符串列表**（`- grafana.local`），元素直接是 host 名；不是 `{host: xxx}` 对象。写错结构同样静默失效。
+- **连带的 argocd HTTPS 陷阱**：即便 host 修对了，argocd-server 默认 HTTPS(443)，经 http Ingress 访问会被 **307 重定向到 https** → 浏览器跳到 https 后无证书/端口不通 → 失败。修复：`configs.params."server.insecure": "true"` 让 server 走 HTTP（开发环境），SSL 在 ingress-nginx 终止。
+- **为什么 echo 没事**：echo Ingress 是手写 yaml 直接 apply 的（`deploy/verify/test-app.yaml`），用 K8s 原生 `.spec.rules[].host`，无 chart 模板中间层 → 写什么是什么。
+
+> 📖 **为什么 Helm 会"静默忽略"字段**（理解这个坑的关键）:
+> - Helm chart 本质是**模板引擎**（Go template）+ 一份 `values.yaml` 默认值。你传的 `-f myvalues.yaml` 会和默认 values **深合并**。
+> - 但模板里**只引用它自己定义的字段路径**。比如 argocd chart 模板写的是 `{{ .Values.server.ingress.hostname }}`，它根本没读 `.Values.server.ingress.hosts`。
+> - 你写了 `hosts:` 但模板不看这个键 → 合并进去了（`helm get values` 能看到），但渲染时**没人引用** → 静默丢弃，回退默认值。
+> - 这不是 bug，是 chart 维护者对"字段叫什么"的选择。不同 chart、甚至同一 chart 的不同主版本，字段名约定都可能变。
+>
+> 💡 **防御姿势**：装前用 `helm template ... --set <字段>=<测试值> | grep host` 实测一次，确认你写的字段能渲染进目标位置。别凭推断或抄旧文档——字段名是 chart 的"私有 API"，升级时要重新核对。
+
+- **决定性诊断步骤**（遇到"Ingress 404 / host 不对"先跑这个）：
+  ```bash
+  # 1. 看实际部署的 Ingress host 是什么（vs 你以为的）
+  kubectl get ingress -A   # HOSTS 列
+  # 2. 看你传给 helm 的 values（helm get values 是原样回显，不代表 chart 认了）
+  helm get values <rel> -n <ns> | grep -A5 ingress
+  # 3. 看 chart 实际渲染出的 host（这才是真相）
+  helm get manifest <rel> -n <ns> | grep -A3 'kind: Ingress' | grep host
+  # 4. 第 2 步和第 3 步对不上 → 字段名写错，chart 没认你的值
+  ```
 
 ### 附：registry 删 tag 的「幽灵 tag」坑
 - `DELETE /v2/<name>/manifests/<digest>` 删 manifest 后，`tags/list` 里 tag 链可能残留（幽灵 tag，pull 会 404）。`gc --delete-untagged` 清的是「无 tag 的 manifest」，反过来「指向空 manifest 的 tag 链」它不管。

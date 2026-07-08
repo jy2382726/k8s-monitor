@@ -29,6 +29,13 @@ grafana:
   service:
     type: NodePort
     nodePort: 30030
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    # ★ grafana subchart (chart 12.7.1) 的 hosts 是「字符串列表」，元素直接是 host 名（不是 {host: xxx} 对象）。
+    # 实测确认（helm template）：hosts[0]=grafana.local 能正确渲染进 .spec.rules[].host。
+    hosts:
+      - grafana.local
   persistence:
     enabled: true
     size: 5Gi

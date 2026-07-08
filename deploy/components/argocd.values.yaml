@@ -8,11 +8,10 @@ server:
   ingress:
     enabled: true
     ingressClassName: nginx
-    hosts:
-      - host: argocd.local
-        paths:
-          - path: /
-            pathType: Prefix
+    # ★ chart v10.1.2 认的字段是 `hostname`（单值字符串），不是 `hosts`（列表）。
+    # 旧版用 hosts[].host 列表写法，chart 会静默忽略、回退默认 argocd.example.com → Ingress host 不匹配 → 浏览器 404。
+    # 实测确认（helm template）：只有 hostname 字段能渲染进 .spec.rules[].host。
+    hostname: argocd.local
   resources:
     requests:
       cpu: 100m
@@ -24,6 +23,10 @@ configs:
   # admin 密码：不在 values 里写死（错误的 bcrypt 占位会让 ArgoCD 跳过自动生成、反而锁死登录）。
   # 让 chart 自动生成随机密码，安装后用以下命令取：
   #   kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+  params:
+    server.insecure: "true"   # ★ 开发环境让 argocd-server 走 HTTP，SSL 在 ingress-nginx 终止。
+                              # 否则 argocd 默认 HTTPS(443)，经 http Ingress 访问会被 307 重定向到 https → 浏览器失败。
+                              # 见 chart 安装提示的 "Option 2: terminate SSL at your ingress"。
 
 controller:
   resources:

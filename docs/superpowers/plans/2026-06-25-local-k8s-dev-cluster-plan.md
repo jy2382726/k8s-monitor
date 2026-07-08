@@ -2133,7 +2133,7 @@ check "metrics-server APIService Available" \
 check "ingress-nginx IngressClass exists" \
   "kubectl get ingressclass | grep -q nginx"
 check "cert-manager CRDs Established" \
-  "[ \$(kubectl get crd -o jsonpath='{.items[?(@.metadata.name contains \"cert-manager.io\")].status.conditions[?(@.type==\"Established\")].status}' | grep -c True) -ge 5 ]"
+  "[ \$(kubectl get crd -o custom-columns='NAME:.metadata.name,EST:.status.conditions[?(@.type==\"Established\")].status' | grep cert-manager.io | grep -c True) -ge 5 ]"
 check "Prometheus ServiceMonitors exist" \
   "kubectl get servicemonitors -A --no-headers | grep -q ."
 
@@ -2145,7 +2145,7 @@ check "echo-server reachable via Ingress" \
 check "Grafana reachable on NodePort 30030" \
   "curl -sSI http://localhost:30030 | grep -q 302"
 check "ArgoCD reachable on NodePort 30080" \
-  "curl -sSI http://localhost:30080 | grep -q 302"
+  "curl -sS -o /dev/null -w '%{http_code}' http://localhost:30080 | grep -qE '^(2|3)'"
 check "PVC echo-data Bound" \
   "kubectl -n e2e-test get pvc echo-data -o jsonpath='{.status.phase}' | grep -q Bound"
 

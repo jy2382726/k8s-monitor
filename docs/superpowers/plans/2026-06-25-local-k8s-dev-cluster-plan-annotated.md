@@ -2055,6 +2055,34 @@ check() {
 > - `2>&1`: 把 stderr 重定向到 stdout（也丢弃）
 > - 我们只关心命令是否成功（exit code），不要输出
 
+#### 两个"假阴性"检查（2026-07-08 实测修正）
+
+> ⚠️ **这两个 check 写错了会让脚本报 FAIL，但集群其实是健康的** —— 典型的"检查坏了，不是集群坏了"。写完 verify-all 第一次跑出来 `14 passed, 2 failed`，排查后确认是脚本自身的两处 bug。
+>
+> **1. `cert-manager CRDs Established`**
+>
+> - ❌ 错误写法:
+>   ```bash
+>   kubectl get crd -o jsonpath='{.items[?(@.metadata.name contains "cert-manager.io")].status.conditions[?(@.type=="Established")].status}' | grep -c True
+>   ```
+>   - 坑①: kubectl jsonpath **没有 `contains` 运算符**，过滤表达式直接失效，返回的是全集群所有 CRD 的 Established 值
+>   - 坑②: jsonpath 默认输出**空格分隔、无换行**，整坨算 1 行，`grep -c True` 按行计数恒为 1 < 5
+> - ✅ 正确写法 —— 改用 `custom-columns`（每行一个 CRD，`grep -c` 才数得对）:
+>   ```bash
+>   kubectl get crd -o custom-columns='NAME:.metadata.name,EST:.status.conditions[?(@.type=="Established")].status' | grep cert-manager.io | grep -c True
+>   ```
+>
+> **2. `ArgoCD reachable on NodePort 30080`**
+>
+> - ❌ 错误写法: `curl -sSI http://localhost:30080 | grep -q 302`（照抄 Grafana 的 `302 → /login`）
+>   - 坑: ArgoCD 在 `/` 直接返回 SPA 首页 `HTTP/1.1 200 OK`，**不像 Grafana 那样重定向**，所以 `grep 302` 永远失败
+> - ✅ 正确写法 —— 用 `http_code` 接受 2xx/3xx（断言"可达"，而不是"必须 302"）:
+>   ```bash
+>   curl -sS -o /dev/null -w '%{http_code}' http://localhost:30080 | grep -qE '^(2|3)'
+>   ```
+>
+> 💡 **教训**: 写健康检查时，先 `curl -sSI` / `kubectl get -o ...` 肉眼看清真实输出，再写 grep 匹配规则——**别把 A 组件的断言直接套到 B 组件上**（Grafana 302 ≠ ArgoCD 302）。
+
 ### Task 7.2: 7 个清理脚本
 
 > 📖 **分层清理的设计**:

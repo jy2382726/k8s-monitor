@@ -2141,11 +2141,11 @@ check "Prometheus ServiceMonitors exist" \
 check "kubectl top nodes works" \
   "kubectl top nodes >/dev/null 2>&1"
 check "echo-server reachable via Ingress" \
-  "curl -sS -H 'Host: echo.local' http://localhost/ >/dev/null"
+  "curl --max-time 10 -sS -H 'Host: echo.local' http://localhost/ >/dev/null"
 check "Grafana reachable on NodePort 30030" \
-  "curl -sSI http://localhost:30030 | grep -q 302"
+  "curl --max-time 10 -sSI http://localhost:30030 | grep -q 302"
 check "ArgoCD reachable on NodePort 30080" \
-  "curl -sS -o /dev/null -w '%{http_code}' http://localhost:30080 | grep -qE '^(2|3)'"
+  "curl --max-time 10 -sS -o /dev/null -w '%{http_code}' http://localhost:30080 | grep -qE '^(2|3)'"
 check "PVC echo-data Bound" \
   "kubectl -n e2e-test get pvc echo-data -o jsonpath='{.status.phase}' | grep -q Bound"
 
@@ -2803,7 +2803,7 @@ $ /root/projects/k8s-monitor/deploy/verify/verify-all.sh
 | ☐ | ingress-nginx 可访问 | `curl localhost` 返回 404 |
 | ☐ | cert-manager CRDs 就绪 | `kubectl get crd \| grep cert-manager` |
 | ☐ | Prometheus/Grafana 可访问 | `curl localhost:30030` 返回 302 |
-| ☐ | ArgoCD 可登录 | `curl localhost:30080` 返回 302 |
+| ☐ | ArgoCD 可登录 | `curl localhost:30080` 返回 200 |
 | ☐ | echo-server 端到端 | `curl -H "Host: echo.local" localhost` 返回 JSON |
 | ☐ | 资源基线已记录 | `cat deploy/verify/baseline.txt` |
 | ☐ | verify-all.sh 全 PASS | `./deploy/verify/verify-all.sh` |

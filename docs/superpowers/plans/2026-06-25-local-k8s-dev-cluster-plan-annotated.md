@@ -2078,7 +2078,7 @@ check() {
 >   - 坑: ArgoCD 在 `/` 直接返回 SPA 首页 `HTTP/1.1 200 OK`，**不像 Grafana 那样重定向**，所以 `grep 302` 永远失败
 > - ✅ 正确写法 —— 用 `http_code` 接受 2xx/3xx（断言"可达"，而不是"必须 302"）:
 >   ```bash
->   curl -sS -o /dev/null -w '%{http_code}' http://localhost:30080 | grep -qE '^(2|3)'
+>   curl --max-time 10 -sS -o /dev/null -w '%{http_code}' http://localhost:30080 | grep -qE '^(2|3)'
 >   ```
 >
 > 💡 **教训**: 写健康检查时，先 `curl -sSI` / `kubectl get -o ...` 肉眼看清真实输出，再写 grep 匹配规则——**别把 A 组件的断言直接套到 B 组件上**（Grafana 302 ≠ ArgoCD 302）。

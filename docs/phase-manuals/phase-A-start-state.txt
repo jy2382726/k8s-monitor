@@ -1,0 +1,68 @@
+# =====================================================================
+# Phase A 部署后态资源清单（闭环④ teardown 还原后 diff 参考）
+# =====================================================================
+# 语义说明（docs/14 §3.3）：
+#   本清单是 Phase A 部署后的 monitoring 命名空间资源态，供闭环④ teardown
+#   还原（回 M1）后 diff 比对用。teardown 回 M1 后，下列 Phase A 增量应消失：
+#     - prometheusrule/core-rules
+#     - prometheusrule/capacity-controlplane-rules
+#     - alertmanager/kube-prometheus-stack-alertmanager
+#   其余为 kps base（M1）资源，teardown 后应保留。
+#   生成命令：kubectl -n monitoring get prometheusrules,alertmanager,deployments,secrets,configmaps -o name
+# =====================================================================
+
+prometheusrule.monitoring.coreos.com/capacity-controlplane-rules
+prometheusrule.monitoring.coreos.com/core-rules
+alertmanager.monitoring.coreos.com/kube-prometheus-stack-alertmanager
+deployment.apps/kube-prometheus-stack-grafana
+deployment.apps/kube-prometheus-stack-kube-state-metrics
+deployment.apps/kube-prometheus-stack-operator
+secret/alertmanager-kube-prometheus-stack-alertmanager
+secret/alertmanager-kube-prometheus-stack-alertmanager-cluster-tls-config
+secret/alertmanager-kube-prometheus-stack-alertmanager-generated
+secret/alertmanager-kube-prometheus-stack-alertmanager-tls-assets-0
+secret/alertmanager-kube-prometheus-stack-alertmanager-web-config
+secret/kube-prometheus-stack-admission
+secret/kube-prometheus-stack-grafana
+secret/prometheus-kube-prometheus-stack-prometheus
+secret/prometheus-kube-prometheus-stack-prometheus-thanos-prometheus-http-client-file
+secret/prometheus-kube-prometheus-stack-prometheus-tls-assets-0
+secret/prometheus-kube-prometheus-stack-prometheus-web-config
+secret/sh.helm.release.v1.kube-prometheus-stack.v1
+secret/sh.helm.release.v1.kube-prometheus-stack.v2
+secret/sh.helm.release.v1.kube-prometheus-stack.v3
+secret/sh.helm.release.v1.kube-prometheus-stack.v4
+secret/sh.helm.release.v1.kube-prometheus-stack.v5
+configmap/kube-prometheus-stack-alertmanager-overview
+configmap/kube-prometheus-stack-apiserver
+configmap/kube-prometheus-stack-cluster-total
+configmap/kube-prometheus-stack-controller-manager
+configmap/kube-prometheus-stack-etcd
+configmap/kube-prometheus-stack-grafana
+configmap/kube-prometheus-stack-grafana-config-dashboards
+configmap/kube-prometheus-stack-grafana-datasource
+configmap/kube-prometheus-stack-grafana-overview
+configmap/kube-prometheus-stack-k8s-coredns
+configmap/kube-prometheus-stack-k8s-resources-cluster
+configmap/kube-prometheus-stack-k8s-resources-multicluster
+configmap/kube-prometheus-stack-k8s-resources-namespace
+configmap/kube-prometheus-stack-k8s-resources-node
+configmap/kube-prometheus-stack-k8s-resources-pod
+configmap/kube-prometheus-stack-k8s-resources-workload
+configmap/kube-prometheus-stack-k8s-resources-workloads-namespace
+configmap/kube-prometheus-stack-kubelet
+configmap/kube-prometheus-stack-namespace-by-pod
+configmap/kube-prometheus-stack-namespace-by-workload
+configmap/kube-prometheus-stack-node-cluster-rsrc-use
+configmap/kube-prometheus-stack-node-rsrc-use
+configmap/kube-prometheus-stack-nodes
+configmap/kube-prometheus-stack-nodes-aix
+configmap/kube-prometheus-stack-nodes-darwin
+configmap/kube-prometheus-stack-persistentvolumesusage
+configmap/kube-prometheus-stack-pod-total
+configmap/kube-prometheus-stack-prometheus
+configmap/kube-prometheus-stack-proxy
+configmap/kube-prometheus-stack-scheduler
+configmap/kube-prometheus-stack-workload-total
+configmap/kube-root-ca.crt
+configmap/prometheus-kube-prometheus-stack-prometheus-rulefiles-0

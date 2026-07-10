@@ -32,6 +32,7 @@ IMAGES=(
   # 加上 daocloud 镜像源已失效（回源 403），版本必须逐一精确对齐，否则 ImagePullBackOff。
   "ghcr.io/jkroepke/kube-webhook-certgen:1.8.4"     # admission webhook 证书生成 Job（chart 默认）
   "quay.io/prometheus/prometheus:v3.12.0-distroless"
+  "quay.io/prometheus/alertmanager:v0.33.0"        # ★ Phase A 启用 AM 时新增（原 enabled:false 时未预灌）
   "quay.io/prometheus/node-exporter:v1.11.1-distroless"
   "quay.io/prometheus-operator/prometheus-operator:v0.92.0"
   "quay.io/prometheus-operator/prometheus-config-reloader:v0.92.0"

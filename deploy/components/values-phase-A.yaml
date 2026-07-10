@@ -1,0 +1,27 @@
+# Phase A 叠加 values —— 修改型资源，teardown 回 M1 基座态 = helm upgrade 只用 base values（去掉本叠加）。
+# 改前值（M1 基座）：alertmanager.enabled=false / ruleSelectorNilUsesHelmValues 未设(默认 true)
+#                   / defaultRules.create 未设(默认 true，自带几十条规则) / metricLabelsAllowlist 未设
+
+# ⚠️ 受控偏离 06 §3.2：单副本，Phase B 首 task 升回 3 副本 quorum + PDB + 反亲和
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    replicas: 1
+
+# 关闭 kps 自带上百条规则，改用自建裁剪版 15 条核心规则（PRD §6.1 契约 + 06 §3.3 裁剪精神）
+defaultRules:
+  create: false
+
+# 选所有 PrometheusRule（与 base values 的 serviceMonitor/podMonitor false 模式一致）；
+# 自建规则 CR 仍带 release label 作双重保险
+prometheus:
+  prometheusSpec:
+    ruleSelectorNilUsesHelmValues: false
+
+# 让 KSM 暴露 node 的 role label 到 kube_node_* metric（默认不暴露），
+# 供 KubeWorkerNodeNotReady 精确区分 worker/control-plane（生产可用，不依赖节点名）
+# ⚠️ plan 原写 kubeStateMetrics.metricLabelsAllowlist，实测 kps chart 87.2.1 的正确路径是
+#    kube-state-metrics subchart 命名空间（带连字符），见 Step 9 核查
+kube-state-metrics:
+  metricLabelsAllowlist:
+    - "nodes=[role]"

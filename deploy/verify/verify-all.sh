@@ -41,6 +41,9 @@ check "cert-manager: 3 Pods Ready" \
   "[ \$(kubectl -n cert-manager get pods --no-headers | grep -c '1/1.*Running') -ge 3 ]"
 check "kube-prometheus-stack: 6+ Pods Ready" \
   "[ \$(kubectl -n monitoring get pods --no-headers | grep -cE '[0-9]+/[0-9]+.*Running') -ge 6 ]"
+# AM StatefulSet pod = alertmanager + config-reloader 两容器（operator 注入），故 2/2；加 sidecar 时同步改
+check "Alertmanager: Pod Ready（Phase A 单副本）" \
+  "kubectl -n monitoring get pods -l app.kubernetes.io/name=alertmanager --no-headers | grep -q '2/2.*Running'"
 check "ArgoCD: 4+ Pods Ready" \
   "[ \$(kubectl -n argocd get pods --no-headers | grep -cE '[0-9]+/[0-9]+.*Running') -ge 4 ]"
 

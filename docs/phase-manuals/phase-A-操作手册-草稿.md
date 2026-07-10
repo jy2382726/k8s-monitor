@@ -161,20 +161,20 @@ Expected: True → Unknown → cleanup → True。**务必确认最后 True。**
 
 > **⚠️ not-ready 用 `pkill -STOP kubelet`，不用 cordon+drain**（PRD 措辞纠正）：cordon 只设 unschedulable、drain 只驱逐 Pod，**都不改 Ready 状态**，照 PRD 字面执行 `KubeWorkerNodeNotReady` 永不 firing。`pkill -STOP kubelet` 暂停 kubelet 心跳 → apiserver `node-lifecycle-controller` 在 `--node-monitor-grace-period`（默认 40s）后标 `Ready=Unknown` → 触发告警。cleanup 用 `pkill -CONT`。已实测：50s 触发、CONT 后 20s 恢复。
 
-### 步骤 5：验收门 ⭐（inject not-ready → 等 6m → AM firing → cleanup）
+### 步骤 5：验收门 ⭐（inject not-ready → 轮询 AM 最多 8m → firing 可见 → cleanup）
 
 ```bash
 ./deploy/verify/assert-firing.sh k8s-monitor-dev-worker
 ```
-**约 6 分钟**完成。Expected 关键行：
+**约 6-8 分钟**（polling：每 30s 查一次 AM、命中即 PASS-break，比固定 sleep 更稳更快——时序链最早 firing ≈ T0+350s，固定 6m(360s) 余量过薄，polling 消除 flaky）。Expected 关键行：
 ```
 [PASS] KubeWorkerNodeNotReady 在 Alertmanager firing 可见
   alert=KubeWorkerNodeNotReady severity=warning node=k8s-monitor-dev-worker state=active
-[4/4] cleanup（恢复 worker 节点）
+[3/3] cleanup（恢复 worker 节点）
 ```
 > ⚠️ 跑完独立确认 worker 恢复：`kubectl get node k8s-monitor-dev-worker -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'` 应 `True`。
-> ⚠️ 若中途 Ctrl-C，脚本 trap 会自动 cleanup（预演修正：加了 INT/TERM trap，否则 kubelet 永久 SIGSTOPped）。
-> ⚠️ **AM `/api/v2/alerts` 顶层是 list**（预演修正点 ④），脚本已用 `isinstance(d,list)` 守卫解析。
+> ⚠️ 若中途 Ctrl-C，脚本 trap 会自动 cleanup（INT/TERM trap，否则 kubelet 永久 SIGSTOPped）。
+> ⚠️ inject 失败时脚本 fast-fail（不白等 8m）；**AM `/api/v2/alerts` 顶层是 list**（预演修正点 ④），脚本用 `isinstance(d,list)` 守卫解析。
 
 **看到 `[PASS]` = Phase A 验收门达成（AC-US1-01 前半）。**
 
@@ -240,6 +240,7 @@ kubectl -n monitoring get prometheusrules | wc -l         # 应回到 ~35 条自
 kubectl -n monitoring get alertmanager                    # No resources found
 ```
 > 凭据型：Phase A 无凭据，无操作。
+> **AM 子资源自动 GC**：`helm upgrade` 回 base（alertmanager.enabled=false）删 Alertmanager CR 时，operator + K8s ownerReferences 会自动清掉 AM 子资源（StatefulSet / Pod / 4 个 generated secret：`-generated`/`-web-config`/`-cluster-tls-config`/`-tls-assets-0`），无需手动删。
 > 对照资源清单 `docs/phase-manuals/phase-A-start-state.txt`：teardown 后 Phase A 三增量（core-rules / capacity-controlplane-rules / alertmanager）应消失。
 
 ---
@@ -249,6 +250,8 @@ kubectl -n monitoring get alertmanager                    # No resources found
 - ✅ 步骤 5 验收门 `[PASS] KubeWorkerNodeNotReady 在 Alertmanager firing 可见`
 - ✅ 步骤 6 `15/15 规则无 lastError` + verify-all `18 passed, 0 failed`
 - ✅ worker 节点终态 Ready=True（无故障残留）
+
+> **契约对账说明**：PRD §6.1 表是跨 milestone 的「产品行为契约」视图。表中 `PrometheusDown` / `Watchdog`（自监控护栏，CLAUDE.md §2）属 **Phase D（M6 Meta-monitoring，见 docs/14）**，本期不做——关 defaultRules 后自监控规则暂缺，Phase D 回收。Phase A 的 15 条 = 节点/Pod/工作负载/容量/控制面核心基础设施告警。照 PRD §6.1 全表对账时，PrometheusDown/Watchdog 的「缺席」是预期，非遗漏。
 
 **用户照本手册手动复现跑通以上 = Phase A 阶段完成（闭环⑤）。** agent 预演只证明手册可信；手册不可复现 = 阶段未完成。
 

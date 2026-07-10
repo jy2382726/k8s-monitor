@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # deploy/verify/assert-firing.sh
 # Phase A 验收门（AC-US1-01 前半）：
-#   注入 worker NotReady → 等 for:5m + grace → Alertmanager API 有 KubeWorkerNodeNotReady firing。
-# L1 行为契约，for:5m 时序敏感，等待 6m（非确定红绿，见 docs/14 §5）。
+#   注入 worker NotReady → 轮询 Alertmanager API（每 30s、最多 8m）→ 命中 KubeWorkerNodeNotReady firing 即 PASS。
+# L1 行为契约，for:5m 时序敏感，polling 消除固定 sleep 的时序 flaky（最早 firing ~T0+350s，见 docs/14 §5）。
 #
 # 用法：./deploy/verify/assert-firing.sh [worker-node]   （默认 k8s-monitor-dev-worker）
 
@@ -18,21 +18,23 @@ trap 'rc=$?; "$INJECT" cleanup not-ready "$WORKER" 2>/dev/null; exit $rc' INT TE
 G=$'\033[1;32m'; R=$'\033[1;31m'; C=$'\033[1;36m'; N=$'\033[0m'
 info(){ printf "${C}▶ %s${N}\n" "$*"; }
 
-info "[1/4] 注入 worker NotReady（$WORKER）+ 记 T0"
-"$INJECT" not-ready "$WORKER"
-T0=$(date +%s)
-info "T0=$T0（$(date 2>/dev/null)）"
+info "[1/3] 注入 worker NotReady（$WORKER）+ 记 T0"
+T0=$(date +%s); info "T0=$T0（$(date 2>/dev/null)）"
+"$INJECT" not-ready "$WORKER" \
+  || { printf "${R}[FAIL] inject not-ready 失败（节点容器不存在/pkill 失败），跳过等待${N}\n"; "$INJECT" cleanup not-ready "$WORKER" 2>/dev/null; exit 1; }
 
-info "[2/4] 等待规则评估（for:5m + node-monitor-grace ~40s），共 6m ..."
-sleep $((6 * 60))
-
-info "[3/4] 查 Alertmanager API firing"
-ALERTS=$(kubectl --request-timeout=10s get --raw \
-  "/api/v1/namespaces/$NS/services/$AM_SVC:9093/proxy/api/v2/alerts" 2>/dev/null)
-
-if echo "$ALERTS" | grep -q '"alertname":"KubeWorkerNodeNotReady"'; then
-  printf "${G}[PASS] KubeWorkerNodeNotReady 在 Alertmanager firing 可见${N}\n"
-  echo "$ALERTS" | python3 -c "
+# 时序链：pkill-STOP → node-monitor-grace ~40s(实测~50s) → KSM 30s 反映 → for:5m(300s) → eval 边界
+# 最早 firing ≈ T0+350s，eval 最坏边界 ~380s。用 polling（每 30s 查、最多 8m、命中即 PASS）替代固定 sleep，消除时序 flaky。
+info "[2/3] 轮询 Alertmanager API（每 30s 一次，最多 8m，命中即 PASS）..."
+DEADLINE=$(( T0 + 8 * 60 ))
+RC=1
+while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+  sleep 30
+  ALERTS=$(kubectl --request-timeout=10s get --raw \
+    "/api/v1/namespaces/$NS/services/$AM_SVC:9093/proxy/api/v2/alerts" 2>/dev/null)
+  if echo "$ALERTS" | grep -q '"alertname":"KubeWorkerNodeNotReady"'; then
+    printf "${G}[PASS] KubeWorkerNodeNotReady 在 Alertmanager firing 可见${N}\n"
+    echo "$ALERTS" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 if not isinstance(d,list): d=d.get('alerts',[])
@@ -44,16 +46,20 @@ for a in d:
             lab.get('alertname'), lab.get('severity'), lab.get('node'),
             st.get('state') if isinstance(st,dict) else st))
 " 2>/dev/null
-  RC=0
-else
-  printf "${R}[FAIL] 6m 后仍未在 Alertmanager 见到 KubeWorkerNodeNotReady firing${N}\n"
+    RC=0
+    break
+  fi
+  info "  未命中，继续轮询（剩余 $(( DEADLINE - $(date +%s) ))s）..."
+done
+
+if [ "$RC" -ne 0 ]; then
+  printf "${R}[FAIL] 8m 内未在 Alertmanager 见到 KubeWorkerNodeNotReady firing${N}\n"
   echo "  排查：1) 节点是否真的 NotReady（kubectl get node $WORKER）；"
   echo "        2) 规则是否加载 + 评估无错；"
   echo "        3) role=worker label 是否在 kube_node_labels（Task 1 核实，规则用 join）；"
   echo "        4) AM 是否收得到告警（kubectl -n $NS logs statefulset/kube-prometheus-stack-alertmanager）。"
-  RC=1
 fi
 
-info "[4/4] cleanup（恢复 worker 节点）"
+info "[3/3] cleanup（恢复 worker 节点）"
 "$INJECT" cleanup not-ready "$WORKER"
 exit $RC

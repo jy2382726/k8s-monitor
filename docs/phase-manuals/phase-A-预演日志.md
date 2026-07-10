@@ -364,3 +364,31 @@ worker NotReady 持续 5m+ → `KubeWorkerNodeNotReady` 在 Alertmanager firing 
 - ✅ ③ 预演日志 `docs/phase-manuals/phase-A-预演日志.md`（本文件，实时落盘 + 脱敏）
 
 > **预演成功 ≠ 阶段完成**：还要定稿手册 + 闭环④ teardown 还原 + 闭环⑤ 用户复现（见 docs/14 §3.3）。本预演只证明手册可信。
+
+---
+
+## 最终整体 code review（subagent-driven-development 收尾，跨 6 task 全局审）
+
+**结论：✅ 预演交付物可信，可进入闭环③/④/⑤。** 无 Critical。集群实证（独立跑）：15 条规则 0 lastError / AM v0.33.0=chart 87.2.1 默认无漂移 / ruleSelector={} 生效 / verify-all 18/0 / 验收门已 PASS / 三节点 Ready 无残留。
+
+### 抓出 2 个 Important + 3 个 Minor，全部处理
+
+**I-1（assert-firing.sh 时序余量薄，已修）**：原 `sleep 6m`(360s) 对最坏 firing 时序 ~380s（pkill→50s grace→KSM 30s→for:5m→eval 边界）余量仅 0-10s，更慢宿主上闭环⑤ 可能 flaky FAIL。→ **改 polling**：每 30s 查 AM、最多 8m、命中即 PASS-break，消除固定 sleep 时序 flaky、平均更快。bash -n OK。（shellcheck SC2154 是 trap 串假阳性，运行时正确。）
+
+**I-2（PrometheusDown/Watchdog 文档裂缝，已补）**：PRD §6.1 表列 PrometheusDown/Watchdog，但它们属 Phase D（docs/14），本期关 defaultRules 后自监控暂缺。手册未标注→用户对账困惑。→ 手册 §5 加「契约对账说明」一行。
+
+**M-1（inject 失败白等，已修）**：assert-firing.sh inject 失败时无 fast-fail，原白等 6m。→ 加 `|| { FAIL; cleanup; exit 1; }`。
+
+**M-3（AM secret 自动 GC，已补文档）**：teardown 时 AM 4 个 generated secret 由 operator ownerReferences 自动 GC（实测 ownerReferences 指向 Alertmanager CR），手册 §4 补说明。
+
+**M-2（KubeContainerOOMKilled 可能 stale firing，记 Phase D/F）**：`last_terminated_reason{OOMKilled}==1` 对「OOM 过已重启」容器恒 1，severity=info 低噪 + 故障注入 restartPolicy:Never 不触发，记 Phase D/F 复查，本期不改。
+
+### 亮点（review 评）
+5 处 plan 缺陷全链捕获+就地修正（每处独立集群证据）/ label join 是 upstream mixin 标准 idiom 生产可用 / 2 个 PrometheusRule CR 跨文件风格同构 / teardown 用 helm upgrade -f 回 base 非 rollback / assert-firing trap 防永久 SIGSTOP / control-plane kind 单 master 安全拒绝 / AM 镜像 helm show 核对无漂移。
+
+### Phase A 预演最终交付物（三件齐 ✅）
+1. ✅ **部署跑通验收门**：Task 5 PASS（KubeWorkerNodeNotReady 在 AM firing 可见）
+2. ✅ **操作手册草稿**：`docs/phase-manuals/phase-A-操作手册-草稿.md`（含全部修正 + 排障 + teardown + 契约对账）
+3. ✅ **预演日志**：`docs/phase-manuals/phase-A-预演日志.md`（本文件，实时落盘 + 脱敏复核 0 密文）
+
+**Phase A agent 预演完成。** 下一步（非本预演范围）：闭环③ 定稿手册 → 闭环④ teardown 还原 → 闭环⑤ 用户复现。

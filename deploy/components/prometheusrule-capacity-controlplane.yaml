@@ -1,0 +1,72 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: capacity-controlplane-rules
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/name: capacity-controlplane-rules
+spec:
+  groups:
+    # === 资源容量 ===
+    - name: kubernetes-capacity.rules
+      rules:
+        - alert: KubePersistentVolumeFillingUp
+          expr: |
+            1 - kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} 用量 >85%"
+            description: "PVC 即将写满。排查：kubectl describe pvc {{ $labels.persistentvolumeclaim }} -n {{ $labels.namespace }}；清理日志/扩容/迁移数据。"
+        - alert: NodeCPUUsageHigh
+          expr: |
+            1 - avg by (node) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.90
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "节点 {{ $labels.node }} CPU >90%"
+            description: "节点 CPU 持续高位。排查：kubectl top pod -A --sort-by=cpu | head；找 CPU 大户 Pod。"
+        - alert: NodeMemoryUsageHigh
+          expr: |
+            1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.95
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "节点 {{ $labels.node }} 内存 >95%"
+            description: "节点内存吃紧，可能触发 eviction。排查：kubectl describe node {{ $labels.node }}；kubectl top pod -A --sort-by=memory。"
+        # P3 趋势告警：磁盘满预测（线性预测 24h 内写满）
+        - alert: NodeDiskUsageTrend
+          expr: |
+            predict_linear(node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}[1h], 24 * 3600) < 0
+          labels:
+            severity: none
+          annotations:
+            summary: "节点 {{ $labels.node }} 磁盘按趋势 24h 内写满（预测）"
+            description: "基于过去 1h 趋势线性外推，根分区 24h 内可能写满。提前清理镜像/日志。severity=none 仅记录不通知。"
+    # === K8s 控制面 ===
+    - name: kubernetes-control-plane.rules
+      rules:
+        - alert: KubeAPIServerDown
+          expr: absent(up{job="apiserver"} == 1)
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "API Server 不可达（apiserver scrape 缺失 3m）"
+            description: "Prometheus 抓不到 apiserver。kubectl get --raw /healthz 排查。"
+        # quorum 自适应阈值（决策②-a）：在线数 < floor(N/2)+1 才触发
+        # ⚠️ job label 修正：实测 kps 的 etcd scrape job 名为 kube-etcd（非 etcd）；
+        #    plan 原文 job="etcd" 匹配 0 series → 规则恒空失效。改 kube-etcd 后 kind 不误触发、prod 在线<quorum 触发。
+        - alert: KubeEtcdInsufficientMembers
+          expr: |
+            count(up{job="kube-etcd"} == 1) < floor(count(up{job="kube-etcd"}) / 2) + 1
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "etcd quorum 风险（在线成员 < quorum）"
+            description: "在线 etcd 成员数低于 quorum(floor(N/2)+1)。kind 单 etcd 仅全挂触发；生产 3 etcd 在线<2 即触发。"

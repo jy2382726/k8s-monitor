@@ -1,0 +1,21 @@
+# Cluster baseline at 2026-07-08T13:45:15Z
+# Purpose: Prometheus 自身故障时的参考基线
+
+## kubectl top nodes
+NAME                            CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%   
+k8s-monitor-dev-control-plane   155m         0%     1301Mi          5%        
+k8s-monitor-dev-worker          149m         0%     758Mi           3%        
+k8s-monitor-dev-worker2         112m         0%     851Mi           3%        
+
+## Pod count by namespace
+     13 kube-system
+      7 monitoring
+      5 argocd
+      3 cert-manager
+      2 e2e-test
+      1 local-path-storage
+      1 ingress-nginx
+
+## WSL2 memory
+               total        used        free      shared  buff/cache   available
+Mem:            23Gi       4.9Gi        12Gi        83Mi       6.3Gi        18Gi

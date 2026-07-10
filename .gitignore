@@ -33,6 +33,11 @@ charts/
 deploy/backup/*
 deploy/uninstall/*
 deploy/verify/*
+# verify/ 装的是源码脚本与参考基线，非运行时产物，反向纳管（见 CLAUDE.md §5）
+!deploy/verify/verify-all.sh
+!deploy/verify/recover.sh
+!deploy/verify/baseline.txt
+!deploy/verify/test-app.yaml
 !**/.gitkeep
 
 # ---- 日志 / 临时 / 备份 ---------------------------------------

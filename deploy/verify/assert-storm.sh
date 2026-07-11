@@ -55,6 +55,8 @@ sleep 3
 cleanup(){ remove_silences; kill $AM $PR 2>/dev/null; }
 trap cleanup EXIT
 isolate_background
+# 等 silence 在 3 副本 propagate + 在途背景通知落地，避免 race 污染窗口（同 assert-convergence）
+sleep 6
 
 am_post(){ curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" --max-time 8 "http://localhost:19093/api/v2/alerts" -d "$1"; }
 notif(){ curl -s --max-time 8 -G "http://localhost:19090/api/v1/query" \

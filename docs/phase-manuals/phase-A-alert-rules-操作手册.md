@@ -513,3 +513,25 @@ diff /tmp/phase-A-m1-baseline.txt /tmp/phase-A-after-teardown.txt
 【验收】  worker NotReady 5m+ → KubeWorkerNodeNotReady 在 AM firing 可见
 【teardown】 helm upgrade 回 base（去叠加）+ delete 2 PrometheusRule + cleanup --all + 资源清单 diff
 ```
+
+---
+
+## 7. 用户复现记录（闭环⑤，阶段完成判据）
+
+- **复现日期**：2026-07-11
+- **复现者**：用户（jy2382726）
+- **复现环境**：worktree `worktree-phase-a-alert-rules`，集群 `k8s-monitor-dev`（kind 3 节点），从闭环④ teardown 后的干净 M1 起点开始复现。
+- **通过的 AC**：**AC-US1-01 前半** —— worker 节点持续 NotReady 5m+ → `KubeWorkerNodeNotReady` 在 Alertmanager firing 可见（`severity=warning` / `node=k8s-monitor-dev-worker` / `state=active`）。
+- **步骤 6 收尾验证**：15 条自建规则全 `health=ok` 无 lastError；`verify-all 18 passed, 0 failed`；worker 终态 Ready=True（cleanup 已跑）。
+
+### 与手册的偏差（复现中发现，已回修手册/脚本，见 commit `ba03681`）
+
+1. **步骤 1.5 预期输出**：手册原写 `Summary: 17 passed, 0 failed`，实测 `17 passed, 1 failed`（`KubeWorkerNodeNotReady 已加载` 检查在步骤 2 apply 规则前为预期 RED）。已改为 `17 passed, 1 failed` + 加说明。
+2. **步骤 5 验收门首次 [FAIL]**：根因是单副本 AM pod 当时落在被注入的 `worker` 节点上，worker 一 NotReady，AM pod 被 stranded、告警 8m 内送不进 AM（规则本身 `state=pending` 正常）。AM pod 漂到 `worker2` 稳定后重跑 `[PASS]`。已往步骤 5 加「AM 位置预检」+ 排障 T9。**根治待 Phase B（3 副本 AM + 反亲和 + PDB）。**
+3. **assert-firing.sh FAIL 排查信息**：StatefulSet 名错（缺 `alertmanager-` 前缀），且未提示 AM 位置这条最可能根因。已修正名 + 加排查点 5（AM 位置）。
+
+### 结论
+
+**Phase A 阶段完成（闭环⑤ 通过）。** 双轨验收闭环达成：agent 预演（闭环②）+ 用户复现（闭环⑤）均跑通验收门，手册经复现反馈修正后可信。
+
+> **集群当前态**：Phase A 部署态（AM 单副本 + 15 条规则 + inject/assert 脚本），即作为 **Phase B 的「阶段开始态」**。Phase B 首 task 须把 AM 升回 3 副本 + 反亲和 + PDB（回收本期单副本偏离 + 根治本复现 T9 的 AM-stranded 脆弱点）。

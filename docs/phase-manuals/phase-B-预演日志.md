@@ -436,3 +436,49 @@ inject-fault.sh 接口核对：`not-ready <node>`（pkill -STOP kubelet）/ `cle
 
 **Phase B 验收门③（AC-US5）synthetic + --real 双 GREEN**：inhibit 规则①② 在配置层（synthetic）与端到端真链路（--real）均验证生效。整条链路 **Task2 node join（真告警带 node）→ Task4 inhibit② equal:[node] → NotReady 抑制同 node Pod 症状** 完整闭环。--real cleanup 干净，worker 恢复 Ready，无 inhibit-crashloop 残留。
 **用户复现降级**（design ⑥）：用户复现只需跑 synthetic 闸（秒级确定性）；--real 留 agent 预演（~17m 非确定 + 改节点 kubelet 状态，不宜要求用户跑）。
+
+---
+
+## Task 6: verify-all 全绿收尾 + phase-B-start-state 资源清单
+
+阶段收尾：全量规则评估无错 + 三验收门复述 + cleanup + 阶段开始态快照（闭环④ diff 基准）+ verify-all 全绿。
+
+### Step 1: 全量规则评估无错
+
+`规则总数=15, 评估错误=无`（含 Task 2 改后的 KubePodCrashLooping/OOMKilled join expr，无 cardinality/label 错误）。
+
+### Step 2: 三验收门复述
+
+| 验收门 | 结果 | 证据 |
+|---|---|---|
+| AC-US2（5→1 收敛）| ✅ GREEN | Task 4 commit 793bec9：delta=1（HA 去重顺带验证）|
+| AC-NFR-02（20→2 风暴）| ✅ GREEN | Task 4 commit 793bec9：收敛率=0.100 |
+| AC-US5（inhibit）| ✅ GREEN | Task 5 commit 14e7457/d105ba2：synthetic + --real 双 GREEN |
+
+AC-US5 synthetic 本次复跑再次 PASS（确定性，秒级）。
+**注**：AC-US2/AC-NFR-02 未在本次重跑——因 PhaseBConvTest/StormTest group 在 Task 4 已通知、4h repeat_interval 内重发会 delta=0 假 FAIL（Task 4 关键坑）。重跑须先 `kubectl rollout restart` AM 清 group 状态。**非回归**，三门均已用提交证据定论。
+
+### Step 3: cleanup --all + 阶段开始态快照
+
+- `inject-fault.sh cleanup --all k8s-monitor-dev-worker`：清 fault-oom / fault-pending（fault-crashloop/inhibit-crashloop 已先删）。
+- `docs/phase-manuals/phase-B-start-state.txt`：64 个 monitoring 资源快照（闭环④ teardown diff 基准）。含：
+  - `statefulset/alertmanager-kube-prometheus-stack-alertmanager`（3 副本）
+  - `poddisruptionbudget/...alertmanager`（minAvailable:2）✓
+  - `configmap/oncall`（凭据型，teardown 保留不删）✓
+  - `prometheusrule/core-rules` + `capacity-controlplane-rules`
+  - 无 fault-* / inhibit-crashloop Pod 残留 ✓
+
+> oncall 检查注意：`kubectl -o name` 不含 namespace，资源名是 `configmap/oncall`（非 `configmap/monitoring/oncall`）。
+
+### Step 4: verify-all 全绿
+
+```
+[PASS] Alertmanager: 3 副本跨 3 节点 + PDB（Phase B quorum HA）
+[PASS] Alertmanager: route 树 + severity 分流 + watchdog 独立 + inhibit（Phase B）
+Summary: 19 passed, 0 failed
+```
+Phase B 部署态基线全绿（HA + route 双检查 PASS，其余 17 项维持）。
+
+### Task 6 结论
+
+Phase B 部署完成态就绪：15 规则无评估错误、三验收门全 GREEN、verify-all 19/0、阶段开始态快照已存（teardown diff 基准）。预演部署部分（闭环②）完成。

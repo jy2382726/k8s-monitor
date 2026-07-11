@@ -60,6 +60,8 @@ check "Prometheus ServiceMonitors exist" \
 # L3: 功能
 check "PrometheusRule: KubeWorkerNodeNotReady 已被 Prometheus 加载" \
   "kubectl --request-timeout=10s get --raw '/api/v1/namespaces/monitoring/services/kube-prometheus-stack-prometheus:9090/proxy/api/v1/rules' | grep -q KubeWorkerNodeNotReady"
+check "Alertmanager: route 树 + severity 分流 + watchdog 独立 + inhibit（Phase B）" \
+  "deploy/verify/am-route-check.sh"
 check "kubectl top nodes works" \
   "kubectl top nodes >/dev/null 2>&1"
 check "echo-server reachable via Ingress" \

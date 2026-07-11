@@ -312,3 +312,72 @@ code=200  → 3s 后 receivers=[{'name':'null'}]   ← 真实路由结果
 **RED 成立**：两脚本前置闸均 FAIL（receiver=`null` ≠ `dingtalk-markdown`，exit 1），符合 L1 预期——Task 4 配 route + 建 `dingtalk-markdown` receiver 后前置闸才会过、主断言才会跑。前置闸秒级 FAIL，无需等 40s。
 
 **偏差申报**：修了 plan verbatim 的 `[[...]]` 双括号 bug（→ `[...]`），否则断言永不 GREEN、阻塞 Task 4。修正仅限括号，逻辑零改动。
+
+---
+
+## Task 4: AM 路由树 + receivers + inhibit_rules（GREEN）
+
+### 接管经过
+
+Task 4 implementer subagent 在 Step 6（GREEN 断言）调试中途**撞 429 限流终止**（非任务失败：「5 小时使用上限」）。终止前留下关键诊断：重复注入同指纹告警不触发新 group_wait（AM 保留组级通知状态，计数器不涨）。controller 接管收尾：盘点确认 Step 1-5 已完成且生效，独立完成 Step 6-8。
+
+### Step 1-5（implementer 已完成，controller 盘点确认）
+
+| Step | 结果 |
+|---|---|
+| 1 am-route-check.sh | 创建（已补 `--request-timeout=10s`，CLAUDE.md §7 约定）|
+| 2 verify-all 加 route 检查 + RED | `[FAIL] Alertmanager: route 树...`（AM config=kps 默认，无 dingtalk-markdown）✓ L0 RED |
+| 3 values-phase-B.yaml 追加 config | `alertmanager.config` 路由树（06 §3.4）：group_by[alertname,namespace,severity] + watchdog 独立 route + critical/warning 分流 + 4 receiver + inhibit_rules 两条 |
+| 4 helm upgrade | **Revision 10 = deployed**（plan 写 4，漂移①累积：实际从 Revision 9 起） |
+| 5 am-route-check PASS | `AM route OK：main+watchdog receiver 齐全 + severity 分流 + inhibit_rules` ✓ |
+
+### ⚠️ Step 6 关键坑：group_wait 状态保留 → 需重启 AM 清状态（手册必写）
+
+**现象**：配好 route 后跑 assert-convergence，counter 不涨（delta=0）。implementer 诊断：AM 对**已通知过的 group** 在 repeat_interval 内不重复发；`notifications_total{integration=webhook}` 是**全局累计 + 多 receiver 噪声**（Watchdog/真告警都加），assert 脚本用 `delta==1` 要求 40s 窗口内**只有目标组一条通知**——多次调试注入 + 残留 group 状态 + 噪声使 delta 测不准。
+
+**解法（controller 执行）**：
+1. `kubectl rollout restart statefulset/alertmanager-kube-prometheus-stack-alertmanager`（滚动重启维持 quorum）→ counter 归零、group 状态全清
+2. 等 3 副本 Ready + sleep 100s（让重启后突发流量——Watchdog group_wait=0 + 真告警 group_wait=30s——各 fire 一次后稳定）
+3. 验 counter 稳定（两次查询 15s 间隔相等 = 突发已过，进入 ~1h 干净窗口，直到 Watchdog 1h repeat）
+4. 干净窗口内跑断言
+
+**实测 counter 稳定在 1**（仅 Watchdog fire 一次）后跑断言。
+
+### Step 6 GREEN（Phase B 验收门①②）
+
+**AC-US2 收敛**（assert-convergence.sh 5）：
+```
+▶ warning → dingtalk-markdown ✓            # 前置闸过（route 分流生效）
+▶ baseline = 4.0
+▶ 已注入 5 条 (HTTP 200)
+[PASS] AC-US2：5 条 PhaseBConvTest 收敛为 1 条通知（delta=1, active=5）
+```
+**delta=1** 证明：① group_by[alertname,namespace,severity] 把 5 条（pod 各异）收敛成 1 组；② **HA 去重生效**（3 副本只 1 个发，若失效 sum=3 → delta=3 报红）。
+
+**AC-NFR-02 风暴**（assert-storm.sh 20）：
+```
+▶ warning → dingtalk-markdown ✓
+▶ 已注入 20 条 (HTTP 200)
+[PASS] AC-NFR-02：20 条风暴 → 2 条通知，收敛率=0.100（< 1:1，inhibition/grouping 生效）
+```
+delta=2（≤2）、收敛率=0.100（≤0.15）✓。20→2 远小于 1:1，护栏（不扰民轴）达标。
+
+### Step 7 verify-all
+
+```
+[PASS] Alertmanager: 3 副本跨 3 节点 + PDB（Phase B quorum HA）
+[PASS] Alertmanager: route 树 + severity 分流 + watchdog 独立 + inhibit（Phase B）
+Summary: 19 passed, 0 failed
+```
+route 检查 L0 RED→GREEN 闭环；HA 检查维持 PASS；总数 18→19（+route 检查 1 项，HA 检查已替换 Phase A 单副本项故不加）。
+
+### inhibit 路由树对齐说明
+
+- `group_by:[alertname,namespace,severity]` 取 06 §3.4（kind 单集群无 cluster label，PRD §6.2 提的 cluster 未经 relabel 不存在）。
+- inhibit ② source 正则 `KubeWorkerNodeNotReady|KubeMasterNodeNotReady|MultipleWorkerNodesNotReady`（覆盖 Phase A 真实三条；06 原文 `KubeNodeNotReady` 在本规则集不存在）；target `KubePod.*|KubeContainer.*`，equal:[node]——依赖 Task 2 的 kube_pod_info join 给 target 补 node（Task 5 验）。
+- receiver webhook URL 指向 Phase C 才建的 `prometheus-webhook-dingtalk`（本期不存在）→ 送达失败（failed_total 高），**但 notifications_total 在 AM 发出即计数**，不影响收敛/路由验收（delta 证明 AM 行为正确）。送达留 Phase C。
+
+### Task 4 结论
+
+**Phase B 验收门①②（AC-US2 / AC-NFR-02）GREEN**：收敛 5→1（delta=1，HA 去重顺带验证）、风暴 20→2（收敛率 0.100）。route 树 + severity 分流 + inhibit_rules 一次配齐，verify-all 19/0。
+**关键坑**：断言脚本因 counter 累计噪声 + group_wait 状态保留，需**重启 AM 清状态 + 等突发稳定**才得确定性 GREEN（用户复现/手册必写）。

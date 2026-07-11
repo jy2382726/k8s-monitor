@@ -31,3 +31,64 @@ alertmanager:
           resources:
             requests:
               storage: 5Gi
+  # === Task 4: AM 路由树（06 §3.4 权威路由树，一次配齐 main+watchdog+inhibit）===
+  # receiver webhook URL 指向 prometheus-webhook-dingtalk（Phase C 建）+ sms-gateway（Phase F），
+  # 本期服务不存在→送达失败，但 AM API/自指标层足够验收敛/路由/抑制（Task 3/5）。
+  # Email receiver 留 Phase D（M9，需 global.smtp_smarthost）。
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: default
+      group_by: [alertname, namespace, severity]   # PRD §6.2；kind 单集群无 cluster label，从 06 §3.4
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        # Watchdog 单独路由：1h 一次，发独立「监控健康」群，不发主告警群（06 §3.10.2）
+        - matchers: ['alertname="Watchdog"']
+          receiver: watchdog-only
+          group_wait: 0s
+          group_interval: 1h
+          repeat_interval: 1h
+        # P0 critical → ActionCard + sms（即时发）
+        - matchers: ['severity="critical"']
+          receiver: dingtalk-actioncard-sms
+          group_wait: 0s
+          repeat_interval: 1h
+        # P1 warning → Markdown（可聚合）
+        - matchers: ['severity="warning"']
+          receiver: dingtalk-markdown
+          group_wait: 30s
+          repeat_interval: 4h
+    receivers:
+      # default：兜底（info/none P2/P3），本期 webhook 到 dingtalk；Phase D 加 email_configs
+      - name: default
+        webhook_configs:
+          - url: http://prometheus-webhook-dingtalk.monitoring.svc:8060/dingtalk/dingtalk-default/send
+            send_resolved: true
+      - name: dingtalk-markdown
+        webhook_configs:
+          - url: http://prometheus-webhook-dingtalk.monitoring.svc:8060/dingtalk/dingtalk-markdown/send
+            send_resolved: true
+      - name: dingtalk-actioncard-sms
+        webhook_configs:
+          - url: http://prometheus-webhook-dingtalk.monitoring.svc:8060/dingtalk/dingtalk-actioncard/send
+            send_resolved: true
+          - url: http://sms-gateway.monitoring.svc:8080/alert      # Phase F（M13），inert 占位
+            send_resolved: false
+      - name: watchdog-only
+        webhook_configs:
+          - url: http://prometheus-webhook-dingtalk.monitoring.svc:8060/dingtalk/watchdog-health/send
+            send_resolved: false
+    inhibit_rules:
+      # ① critical 抑制同 namespace+alertname 的 warning（根因已知时降级，06 §3.4）
+      - source_matchers: ['severity="critical"']
+        target_matchers: ['severity="warning"']
+        equal: [namespace, alertname]
+      # ② 节点 NotReady 抑制该节点 Pod/Container 症状（equal:[node]，AC-US5）
+      #    source 用 Phase A 实际 alertname（06 原文 KubeNodeNotReady 不存在，改为正则覆盖 3 条）
+      #    target 须带 node——Task 2 已用 kube_pod_info join 给 KubePod.*/KubeContainer.* 补 node
+      - source_matchers: ['alertname=~"KubeWorkerNodeNotReady|KubeMasterNodeNotReady|MultipleWorkerNodesNotReady"']
+        target_matchers: ['alertname=~"KubePod.*|KubeContainer.*"']
+        equal: [node]

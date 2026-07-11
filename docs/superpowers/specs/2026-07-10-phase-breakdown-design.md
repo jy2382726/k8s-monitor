@@ -89,7 +89,7 @@ graph LR
 - **④ 前置 OQ / 依赖**：**OQ-3** 值班人（hard blocker → MVP 用 oncall ConfigMap 占位值策略，`docs/14` §7.1.1）；**OQ-8** kind 3 节点 HA 限制 → Phase B 的 HA 验收**仅验**拓扑分布合法 ＋ PDB 生效 ＋ 停一 Pod 后 quorum 仍成立（2<3），**不验网络分区/脑裂**（留生产割接）。
 - **⑤ teardown 资源类型**：**修改型**——AM 单副本→3 副本，teardown = `helm upgrade -f values-phase-A.yaml` 回 A 态；route tree 改了 AM config → 回 A 态；**凭据型**——`oncall` ConfigMap 跨 Phase 共享（C 只读渲染 @人）→ **保留不删**（沿用 `docs/14` §3.3，不进 Git，手动注入）。
 - **⑥ IaC-TDD 类型**：**L1**（AC-US2 收敛、AC-NFR-02 风暴：多数可 RED，先写「注入 N 个 CrashLoop→查 AM API 送达条数<N」断言再配 route）＋ **L1 时序敏感**（AC-US5 inhibit：需 NotReady `for:5m`＋CrashLoop `for:10m` 同时 firing 再查 inhibited，红绿模糊 → 标**集成测试、非确定红绿**，不强求 RED-first）。
-- **⑦ 降级规则**：无（收敛/风暴注入分钟级完成）。
+- **⑦ 降级规则**：**集成测试类**（AC-US5 inhibit：synthetic 闸秒级确定 = **用户复现级**；`--real` 全链路 ~17m 非确定红绿 = **agent 预演级**；用户复现只验 synthetic 闸，见 `docs/14` §3.3 + phase-B 手册 §3.4）。收敛/风暴注入（AC-US2/AC-NFR-02）分钟级完成、无需降级。
 - **⑧ plan 写作提示**：(a) 首任务 = **AM 升 3 副本**（硬回收点）＋建 oncall ConfigMap；(b) HA 验收边界**显式声明不验脑裂**（`docs/14` §3.1 判断 3）；(c) 风暴注入给出 batch 起 N 个 CrashLoop Pod 的可复现方法；(d) inhibit（AC-US5）标集成测试；(e) **AM route 一次配齐 main＋watchdog 两个 receiver**（watchdog receiver 在 D 才挂真实群，定义提前到位，避免 D 第三次改 AM config，`docs/14` §7.1.1 OQ-6）。
 
 ### Phase C · 钉钉触达（`docs/14` §3）

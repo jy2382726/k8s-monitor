@@ -41,6 +41,8 @@ deploy/verify/*
 !deploy/verify/inject-fault.sh
 !deploy/verify/assert-firing.sh
 !deploy/verify/am-ha-check.sh
+!deploy/verify/assert-convergence.sh
+!deploy/verify/assert-storm.sh
 !**/.gitkeep
 
 # ---- 日志 / 临时 / 备份 ---------------------------------------

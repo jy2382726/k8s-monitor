@@ -1,0 +1,33 @@
+# Phase B 叠加 values —— 修改型资源，teardown 回 Phase A 态 = helm upgrade 只用 base + values-phase-A.yaml（去掉本叠加）。
+# 改前值（Phase A 末态）：alertmanagerSpec.replicas=1 / 无 HA 字段 / 无 PDB / AM config=kps 默认(null receiver)
+# 本文件 Task 1 只动 HA 副本/亲和/拓扑/toleration/资源/存储 + PDB；route tree 在 Task 4 追加 alertmanager.config。
+
+alertmanager:
+  # PDB（kps 顶层字段，非 alertmanagerSpec；实测 87.2.1 渲染 PodDisruptionBudget minAvailable:2）
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  alertmanagerSpec:
+    replicas: 3                       # 回收 06 §3.2 基线（Phase A 单副本偏离到此硬回收）
+    podAntiAffinity: "hard"           # → requiredDuringScheduling, topologyKey=hostname（实测渲染）
+    topologySpreadConstraints:        # 强制跨节点（06 §3.2「拓扑分布」）
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule  # 硬性（与 podAntiAffinity:hard 一致）；plan 漏写此字段，server-side apply 校验失败，实测补回
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: alertmanager
+    tolerations:                      # ⚠️ kind 仅 2 个无 taint worker；硬反亲和要 3 节点须容忍 CP taint
+      - key: node-role.kubernetes.io/control-plane
+        effect: NoSchedule
+    resources:                        # 06 §3.2 资源配额 100m-500m / 256-512Mi
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+    storage:                          # 06 §3.2：5Gi × 3（Phase A 无 PVC，新增）
+      volumeClaimTemplate:
+        spec:
+          storageClassName: standard  # kind 默认 SC（rancher.io/local-path，已实测）
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi

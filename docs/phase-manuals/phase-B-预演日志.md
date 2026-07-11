@@ -533,3 +533,47 @@ Phase B 部署完成态就绪：15 规则无评估错误、三验收门全 GREEN
 - **闭环③**：手册已草稿（本次产出），待定稿。
 - **闭环④ teardown**：按手册 §5 + 各 Task「📝 改动记录」还原到 Phase A 末态 + diff `phase-B-start-state.txt`。
 - **闭环⑤ 用户复现**：用户照定稿手册手动复现（agent 只答疑不代跑），跑通三验收门（AC-US5 用户复现按降级只验 synthetic 闸）= **Phase B 阶段完成**。
+
+---
+
+## 闭环⑤后扩展：AC-US5 --real 全链路三轮调试复盘（2026-07-12）
+
+> 闭环⑤ 用户复现按降级只验 synthetic 闸（通过）。用户随后追加跑 `--real` 全链路（design ⑥ 集成测试，非确定红绿），连栽三轮。此处复盘根因 + 修复 + 教训——**三轮里两轮是 agent 自己引入/未测到的 bug**，印证「synthetic 通过 ≠ 真链路通过」，--real 才是 inhibit 的硬验收。
+
+### 错误①：Task2 `KubePodCrashLooping node=(none)`
+
+- **现象**：--real [2/5] 查到 KubePodCrashLooping 告警 firing，但 `node=(none)` → inhibit② `equal:[node]` 匹配 0。
+- **根因（辗转两版推断）**：
+  - 初判「集群 core-rules 被 teardown 还原成 Phase A 无 join 版」——**逻辑不成立**：--real 在手册 §3.4（验收），步骤1（apply joined core-rules）在 §2（部署），从上到下执行到 --real 时 join 应已在集群；teardown 在 §5，不可能提前还原。
+  - 用户点破真因：**步骤1 的 `kubectl apply -f deploy/components/prometheusrule-core.yaml` 是在项目根目录执行的**。根目录在 `main` 分支、**无 Phase B 改动**（`origin/main` 的 prometheusrule-core.yaml 0 个 join，且无 values-phase-B.yaml）→ apply 到 Phase A 旧版。而步骤3 helm upgrade 因 main 无 values-phase-B.yaml 必在 worktree 跑 → AM Phase B 全套进集群，唯独 core-rules 是 Phase A。这就是观察到的「不一致中间态」。
+- **修复**：worktree 内 `kubectl apply` 把 joined 版同步进集群；直接跑 joined expr 实测返回 `node=k8s-monitor-dev-worker`（左无node / kube_pod_info 有 / join 后带node 三段对照铁证）。
+- **教训**：手册 `kubectl apply -f deploy/...` 相对路径 + Phase B 未 merge main = 复现陷阱 → 手册加工作目录前提（本次同步修）。
+
+### 错误②：Task4 `inhibitedBy=(none)`（6min 没等够）
+
+- **现象**：--real [4/5] KubePodCrashLooping 未被抑制。取证发现 KubeWorkerNodeNotReady **从没 fire 过**（AM resolved 库 0 条、Prom 规则 inactive），节点实测仅 NotReady 5m13s。
+- **根因**：[3/5] 盲等 `sleep 6min` < `node-monitor-grace(~90s) + KSM scrape(30s) + for:5m ≈ T0+7min`，检查时 source 告警仍 pending；紧接着 cleanup CONT kubelet，条件变 false，告警**永远 fire 不了**。
+- **修复**：盲等 → condition-based 轮询（每 20s 查 AM，最长 9min，命中 source active 即进 [4/5]）。
+- **教训**：测试脚本不要盲等固定时长，用 condition-based wait（systematic-debugging 推荐做法）。
+
+### 错误③：`9min 内未 firing`（agent 自造 bug）
+
+- **现象**：修了②之后 9min 仍报 FAIL。但节点实测 NotReady 8m21s（无 flapping，事件各 1 次）、role=worker label 在、join 右侧匹配、规则 health=ok——所有条件都说该 fire。
+- **根因（怀疑到自己的 instrumentation）**：轮询代码写 `[ "$nr_st" = "firing" ]`，但 **AM 的 `status.state` 取值是 active/unprocessed/suppressed，≠ Prometheus 的 firing**。告警其实早 active（`ALERTS` 指标过去 35min 有 5 个 firing 采样点为铁证），poll 却永远匹配不上 "firing" → 假 FAIL。
+- **修复**：`firing` → `active`；加 `KUBELET_STOPPED` trap 兜底（脚本被中断/超时杀时 EXIT trap 自动 `pkill -CONT kubelet`——调试期一次 2min 超时杀命令致 kubelet 残留 STOP，靠此防住）。
+
+### 最终验证（GREEN）
+
+```
+[2/5] KubePodCrashLooping firing? node=k8s-monitor-dev-worker ✓（join 生效）
+[3/5] ✓ KubeWorkerNodeNotReady active(=firing)（T0+380s 轮询命中）  ← ~90s+5m 预测精准
+[4/5] [PASS] AC-US5（real）：KubePodCrashLooping 被 NotReady 抑制（inhibitedBy=e07ae90b49e6161c）
+[5/5] cleanup ✓ 已 CONT kubelet
+```
+
+### 三轮教训提炼（已落 memory / 文档）
+
+1. **`kubectl apply` 相对路径 + 未 merge 分支**：手册命令须指定工作目录，复现必须在目标 phase 的分支 checkout 内（项目根目录在 main，无未合并 phase 改动）。
+2. **测试脚本用 condition-based wait，不盲等固定时长**：k8s 控制面 grace / scrape 延迟叠加，盲等时长难估准。
+3. **跨系统状态名不同**：Prometheus 告警 `state=firing`，Alertmanager `status.state=active`，写断言前必须核实目标 API 真实返回值（→ CLAUDE.md 监控必知补一条）。
+4. **自己的 instrumentation 也是 bug 源**：systematic-debugging——当所有环境证据都说「该成功」却失败时，先怀疑你的测试工具/断言，别只怀疑被测系统。

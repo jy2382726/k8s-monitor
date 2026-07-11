@@ -46,6 +46,7 @@
 > - **Alertmanager `/api/v2/alerts` 返回顶层是 `list`**（非 `{"alerts":[...]}` dict）。解析脚本用 `isinstance(d,list)` 守卫，别 `d.get('alerts',[])`。
 > - **KSM `kube_pod_container_status_*` 系列 metric 无 `node` label**（labels 只有 container/namespace/pod/uid）。规则要用 node 维度（如 inhibit `equal:[node]` 抑制同节点 Pod 症状）须 join：`(...) * on(namespace,pod) group_left(node) kube_pod_info`（kube_pod_info 含 node，每 pod 1 series，多对一安全）。不 join 则 inhibit 匹配 0。
 > - **AM `alertmanager_notifications_total{integration="webhook"}` 无 `alertname`/`receiver` label**（全局聚合计数器，不区分通知来自哪个告警/receiver）。用它 delta 验"某类告警收敛成 1 条"会被背景活跃告警污染 → 须 auto-silence 背景 + sleep 等 propagate + 断言放宽（详见 memory `project_am_notification_test_pitfalls`）。硬验收看触达内容（Phase C 钉钉消息）。
+> - **Prometheus 与 Alertmanager 的告警状态名不同**：Prometheus `/api/v1/alerts` 用 `state="firing"`；**Alertmanager `/api/v2/alerts` 用 `status.state`，取值 `active`/`unprocessed`/`suppressed`（没有 "firing"）**。写脚本轮询/断言 AM 告警状态必须用 `active`（=已过 group_wait、firing 中、可作 inhibit source），写 `firing` 永远匹配不上 → 假 FAIL（Phase B AC-US5 --real 踩过，靠 `ALERTS` 指标 5 个 firing 采样点才证清白）。
 
 ## 4. 明确不做（Non-Goals，🔒 禁止重开）
 

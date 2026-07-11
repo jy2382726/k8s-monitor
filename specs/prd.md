@@ -386,7 +386,7 @@
 | 资源配额 | kind 容量内 | Prom 2CPU/8Gi · AM 100-500m/256-512Mi×3 · Grafana 500m/512Mi-1Gi · KSM 500m/512Mi×2 · node-exporter 200m/128Mi×28 |
 | 告警链路时延 | 故障注入→`for` 满→AM 收敛→钉钉送达 ≤ `for`+1min（见 §11） | 同左（容量内不劣化） |
 | 可用性 SLI | AM quorum 成立（3 节点验证 Gossip / 选主） | API Server ≥99.9% / Prometheus 在线 ≥99% / P0 ACK SLA 5min（理论参考，仅 @人不强制） |
-| 故障注入可复现 | NotReady（cordon/drain）· CrashLoop（坏镜像）· OOM（超 limit）· PodPending · 磁盘水位 全部触发对应告警 + 钉钉送达 | — |
+| 故障注入可复现 | NotReady（`pkill -STOP kubelet` 暂停心跳）· CrashLoop（坏镜像）· OOM（超 limit）· PodPending · 磁盘水位 全部触发对应告警 + 钉钉送达 | — |
 | 自愈 | recover.sh 能从挂机 / 节点 stop / Pod netns wedge 恢复（已落地） | — |
 | 验证 | verify-all.sh 全绿（已落地，对齐 06 验收项） | — |
 | 安全/合规 | — | Grafana AGPL-3.0 直接部署不深度二次分发；钉钉加签 / SMTP 入 K8s Secret；Prometheus lifecycle / admin API 禁用；最小 RBAC `get/list/watch`；不暴露公网 Ingress |
@@ -447,8 +447,10 @@
 ### AC-US1-01：NotReady → P1 ActionCard 送达
 
 **Given** kind 集群 + Alertmanager / 钉钉配置就绪；
-**When** `kubectl cordon + drain` 一 worker 节点持续 5m；
+**When** 对一 worker 节点 `docker exec <node> pkill -STOP kubelet` 暂停心跳（~40s 后 apiserver 标 NotReady），持续 5m；
 **Then** 主告警群收到 `severity=warning` 的 KubeWorkerNodeNotReady ActionCard（含节点名 / 持续 / kubectl 命令 / Runbook 链接）@值班人，且 MTTD ≤ 6min。
+
+> ⚠️ **注入方式勘误（Phase A 预演实测）**：原措辞 `cordon + drain` **不触发 NotReady**——`cordon` 只设 `unschedulable`、`drain` 只驱逐 Pod，都不改 `Ready` 状态，照原措辞 `KubeWorkerNodeNotReady` 永不 firing。改为 `docker exec <node> pkill -STOP kubelet`（暂停 kubelet 心跳 → apiserver `node-lifecycle-controller` 在 `--node-monitor-grace-period` 默认 40s 后标 `Ready=Unknown`）。cleanup 用 `pkill -CONT kubelet`。详见 `docs/phase-manuals/phase-A-alert-rules-操作手册.md` §4-T5。
 
 ### AC-US2-01：收敛 + @人
 

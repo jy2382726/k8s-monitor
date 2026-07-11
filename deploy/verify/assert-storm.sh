@@ -16,11 +16,45 @@ PROBE="PhaseBStormProbe"
 G=$'\033[1;32m'; R=$'\033[1;31m'; C=$'\033[1;36m'; N0=$'\033[0m'
 info(){ printf "${C}▶ %s${N0}\n" "$*"; }
 
+SIL_IDS=""
+isolate_background(){
+  # 隔离背景告警（同 assert-convergence）：notifications_total 全局聚合无 alertname 维度，
+  # 背景活跃告警（如 KubePodCrashLooping）会污染风暴收敛率 → 假 FAIL。silence 背景后窗口干净。
+  local bg starts ends
+  starts=$(date -u -d '-1 min' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo 2026-07-11T00:00:00Z)
+  ends=$(date -u -d '+30 min' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo 2026-07-11T01:00:00Z)
+  bg=$(curl -s --max-time 8 "http://localhost:19093/api/v2/alerts" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+ex={'$ALERT','$PROBE'}
+print('\n'.join(sorted({a['labels'].get('alertname') for a in d
+  if a['status']['state']=='active' and a['labels'].get('alertname') and a['labels'].get('alertname') not in ex})))
+")
+  while IFS= read -r an; do
+    [ -z "$an" ] && continue
+    local sid
+    sid=$(curl -s -X POST -H "Content-Type: application/json" --max-time 8 "http://localhost:19093/api/v2/silences" \
+      -d "{\"matchers\":[{\"name\":\"alertname\",\"value\":\"$an\",\"isRegex\":false}],\"startsAt\":\"$starts\",\"endsAt\":\"$ends\",\"createdBy\":\"phaseB-assert\",\"comment\":\"temp isolate storm test\"}" \
+      | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('silenceID') or d.get('id',''))" 2>/dev/null)
+    [ -n "$sid" ] && SIL_IDS="$SIL_IDS $sid"
+  done <<< "$bg"
+  # preemptive silence PROBE：探针注入后路由到 webhook，group_wait 后会在窗口内通知污染 delta。
+  # silence 它不影响 receivers 检查，但阻止通知（探针 resolve 用 endsAt=00:00:00Z 不可靠，silence 更稳）。
+  local psid
+  psid=$(curl -s -X POST -H "Content-Type: application/json" --max-time 8 "http://localhost:19093/api/v2/silences" \
+    -d "{\"matchers\":[{\"name\":\"alertname\",\"value\":\"$PROBE\",\"isRegex\":false}],\"startsAt\":\"$starts\",\"endsAt\":\"$ends\",\"createdBy\":\"phaseB-assert\",\"comment\":\"temp silence probe\"}" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('silenceID') or d.get('id',''))" 2>/dev/null)
+  [ -n "$psid" ] && SIL_IDS="$SIL_IDS $psid"
+  [ -n "$(echo $SIL_IDS)" ] && info "  已 silence 背景告警 + 探针（隔离测试噪声）：$(echo $SIL_IDS | wc -w) 个"
+}
+remove_silences(){ for sid in $SIL_IDS; do curl -s -X DELETE --max-time 5 "http://localhost:19093/api/v2/silence/$sid" >/dev/null 2>&1; done; }
+
 kubectl -n "$NS" port-forward svc/kube-prometheus-stack-alertmanager 19093:9093 &>/dev/null & AM=$!
 kubectl -n "$NS" port-forward svc/kube-prometheus-stack-prometheus 19090:9090 &>/dev/null & PR=$!
 sleep 3
-cleanup(){ kill $AM $PR 2>/dev/null; }
+cleanup(){ remove_silences; kill $AM $PR 2>/dev/null; }
 trap cleanup EXIT
+isolate_background
 
 am_post(){ curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" --max-time 8 "http://localhost:19093/api/v2/alerts" -d "$1"; }
 notif(){ curl -s --max-time 8 -G "http://localhost:19090/api/v1/query" \

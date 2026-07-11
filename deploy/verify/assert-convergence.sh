@@ -16,11 +16,48 @@ PROBE="PhaseBConvProbe"
 G=$'\033[1;32m'; R=$'\033[1;31m'; C=$'\033[1;36m'; N0=$'\033[0m'
 info(){ printf "${C}▶ %s${N0}\n" "$*"; }
 
+SIL_IDS=""
+isolate_background(){
+  # 隔离背景告警：为当前 active 告警（排除本脚本 ALERT/PROBE）建临时 silence。
+  # 根因：notifications_total{integration=webhook} 是全局聚合、无 alertname 维度——任何活跃告警
+  # （如 kube-proxy crashloop 触发的 KubePodCrashLooping，每 group_interval 通知一次）都会在 40s 窗口
+  # 贡献增量 → delta>1 假 FAIL。silence 背景后窗口内只剩注入的 ALERT，delta 才能确定性 = 1。
+  local bg starts ends
+  starts=$(date -u -d '-1 min' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo 2026-07-11T00:00:00Z)
+  ends=$(date -u -d '+30 min' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo 2026-07-11T01:00:00Z)
+  bg=$(curl -s --max-time 8 "http://localhost:19093/api/v2/alerts" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+ex={'$ALERT','$PROBE'}
+print('\n'.join(sorted({a['labels'].get('alertname') for a in d
+  if a['status']['state']=='active' and a['labels'].get('alertname') and a['labels'].get('alertname') not in ex})))
+")
+  while IFS= read -r an; do
+    [ -z "$an" ] && continue
+    local sid
+    sid=$(curl -s -X POST -H "Content-Type: application/json" --max-time 8 "http://localhost:19093/api/v2/silences" \
+      -d "{\"matchers\":[{\"name\":\"alertname\",\"value\":\"$an\",\"isRegex\":false}],\"startsAt\":\"$starts\",\"endsAt\":\"$ends\",\"createdBy\":\"phaseB-assert\",\"comment\":\"temp isolate convergence test\"}" \
+      | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('silenceID') or d.get('id',''))" 2>/dev/null)
+    [ -n "$sid" ] && SIL_IDS="$SIL_IDS $sid"
+  done <<< "$bg"
+  # preemptive silence PROBE：探针注入后会路由到 webhook（warning→dingtalk-markdown），
+  # group_wait(30s) 后会在窗口内通知污染 delta。silence 它不影响 receivers 字段检查（路由
+  # 计算与 silence 无关），但阻止它发通知。探针 resolve 用 endsAt=00:00:00Z 不可靠，silence 更稳。
+  local psid
+  psid=$(curl -s -X POST -H "Content-Type: application/json" --max-time 8 "http://localhost:19093/api/v2/silences" \
+    -d "{\"matchers\":[{\"name\":\"alertname\",\"value\":\"$PROBE\",\"isRegex\":false}],\"startsAt\":\"$starts\",\"endsAt\":\"$ends\",\"createdBy\":\"phaseB-assert\",\"comment\":\"temp silence probe\"}" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('silenceID') or d.get('id',''))" 2>/dev/null)
+  [ -n "$psid" ] && SIL_IDS="$SIL_IDS $psid"
+  [ -n "$(echo $SIL_IDS)" ] && info "  已 silence 背景告警 + 探针（隔离测试噪声）：$(echo $SIL_IDS | wc -w) 个"
+}
+remove_silences(){ for sid in $SIL_IDS; do curl -s -X DELETE --max-time 5 "http://localhost:19093/api/v2/silence/$sid" >/dev/null 2>&1; done; }
+
 kubectl -n "$NS" port-forward svc/kube-prometheus-stack-alertmanager 19093:9093 &>/dev/null & AM=$!
 kubectl -n "$NS" port-forward svc/kube-prometheus-stack-prometheus 19090:9090 &>/dev/null & PR=$!
 sleep 3
-cleanup(){ kill $AM $PR 2>/dev/null; }
+cleanup(){ remove_silences; kill $AM $PR 2>/dev/null; }
 trap cleanup EXIT
+isolate_background
 
 am_post(){ curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" --max-time 8 "http://localhost:19093/api/v2/alerts" -d "$1"; }
 notif(){ curl -s --max-time 8 -G "http://localhost:19090/api/v1/query" \
@@ -58,7 +95,7 @@ if [ "$ok" = "1" ] && [ "$active" = "$N" ]; then
   printf "${G}[PASS] AC-US2：$N 条 $ALERT 收敛为 1 条通知（delta=%.0f, active=$active）${N0}\n" "$delta"; RC=0
 else
   printf "${R}[FAIL] AC-US2：delta=%.0f（期望 1）, active=$active（期望 $N）${N0}\n" "$delta"
-  echo "  排查：① group_by 是否误含 pod（应 [alertname,namespace,severity]）；② receiver 是否 webhook；③ HA 去重是否失效（sum=3 表 3 副本各发）；④ 注入失败。"
+  echo "  排查：① group_by 是否误含 pod（应 [alertname,namespace,severity]）；② receiver 是否 webhook；③ HA 去重失效 vs 背景污染——本脚本已自动 silence 背景告警，若仍 FAIL 查 AM 是否还有活跃告警未 silence；④ 注入失败。per-replica 计数相等=去重失效，不等=背景噪声。"
   RC=1
 fi
 # cleanup 合成告警（resolve）

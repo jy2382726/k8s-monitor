@@ -411,6 +411,28 @@ inject-fault.sh 接口核对：`not-ready <node>`（pkill -STOP kubelet）/ `cle
 
 ### --real 全链路（design ⑥ 集成测试，~16m，非确定红绿）
 
-（后台运行中，结果后补——见下方「--real 结果」）
+**结果：✅ GREEN（全链路 PASS，~17m）**
 
-机制：部署真 CrashLoop pod 到 worker（nodeName 强制带 node）→ 等 KubePodCrashLooping firing(for:10m) → pkill -STOP kubelet → 等 KubeWorkerNodeNotReady firing(for:5m) → 查真 KubePodCrashLooping 的 status.inhibitedBy 非空。验 Task2 join + Task4 inhibit② 在**真告警**链路下生效（synthetic 验配置层，--real 验端到端）。
+```
+▶ [1/5] 部署 CrashLoop pod 到 k8s-monitor-dev-worker（nodeName 强制）
+        pod/inhibit-crashloop created → CrashLoopBackOff（exit 1）
+▶ [2/5] 等 KubePodCrashLooping firing（for:10m + buffer=11m）
+        KubePodCrashLooping firing? node=k8s-monitor-dev-worker, 抑制前 inhibitedBy=(none)
+▶ [3/5] 注入 NotReady（pkill -STOP kubelet @ worker）+ 等 firing（for:5m+grace≈6m）
+        ✓ 已 STOP kubelet @ worker（T0 记录）
+▶ [4/5] 查 KubePodCrashLooping 是否被 NotReady 抑制
+[PASS] AC-US5（real）：KubePodCrashLooping 被 NotReady 抑制（inhibitedBy=e07ae90b49e6161c）
+▶ [5/5] cleanup ✓ 已 CONT kubelet @ worker（节点恢复 Ready）+ 删 inhibit-crashloop
+```
+
+**关键证据**：
+- [2/5] **真 KubePodCrashLooping firing 且 node=k8s-monitor-dev-worker**——证明 Task 2 kube_pod_info join 在**真告警**链路生效（非仅 synthetic），real alert 带 node label。
+- [4/5] kubelet STOP → KubeWorkerNodeNotReady firing 后，**真 KubePodCrashLooping 的 inhibitedBy 非空**（=e07ae90b49e6161c = KubeWorkerNodeNotReady 指纹）——Task4 inhibit② equal:[node] 在端到端真链路下抑制成功。
+- [5/5] cleanup 完成：kubelet CONT、inhibit-crashloop 删除、worker Ready=True 恢复 ✓。
+
+**机制**：部署真 CrashLoop pod 到 worker（nodeName 强制带 node）→ 等 KubePodCrashLooping firing(for:10m) → pkill -STOP kubelet → 等 KubeWorkerNodeNotReady firing(for:5m) → 查真 KubePodCrashLooping 的 status.inhibitedBy 非空。synthetic 验配置层（秒级确定性），--real 验端到端真链路（~17m 非确定，design ⑥）。
+
+### Task 5 结论
+
+**Phase B 验收门③（AC-US5）synthetic + --real 双 GREEN**：inhibit 规则①② 在配置层（synthetic）与端到端真链路（--real）均验证生效。整条链路 **Task2 node join（真告警带 node）→ Task4 inhibit② equal:[node] → NotReady 抑制同 node Pod 症状** 完整闭环。--real cleanup 干净，worker 恢复 Ready，无 inhibit-crashloop 残留。
+**用户复现降级**（design ⑥）：用户复现只需跑 synthetic 闸（秒级确定性）；--real 留 agent 预演（~17m 非确定 + 改节点 kubelet 状态，不宜要求用户跑）。

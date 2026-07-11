@@ -406,29 +406,32 @@ kubectl -n monitoring get pvc | grep -c alertmanager   # 预期: 0
 
 ### 5.2 修改型：core-rules 回 Phase A 版本（去掉 node join）
 
-步骤 1 给 `KubePodCrashLooping` / `KubeContainerOOMKilled` 加了 node join。teardown 要改回 Phase A 原文 expr：
+步骤 1 给 `KubePodCrashLooping` / `KubeContainerOOMKilled` 加了 node join。teardown 要把**集群**里的 core-rules 改回 Phase A 原文 expr（无 join）：
 
 ```bash
-# 改前 expr（Phase A 原文）：
-#   KubePodCrashLooping:    max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1
-#   KubeContainerOOMKilled: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+# 把 Phase A 版 core-rules（无 join）apply 到集群
+# ⚠️ 用 git show 管道喂给集群，不动 worktree 的 Phase B 版文件（它是 Phase B 产物，保留）
+git show origin/main:deploy/components/prometheusrule-core.yaml | kubectl apply -f -
+# 预期: prometheusrule.monitoring.coreos.com/core-rules configured
 ```
 
-用 git 恢复（若你用 git 管理改动，找到 Phase A 末态的 commit）：
+> **Phase A 改前 expr**（备查，若 `origin/main` 不适用时手动改回）：
+> - `KubePodCrashLooping`: `max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1`
+> - `KubeContainerOOMKilled`: `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1`
+>
+> ⚠️ **teardown 只还原集群，不撤销 worktree 产物**：`deploy/components/prometheusrule-core.yaml`（join 版，Phase B 产物）**保留不动**。用 `git show ... | kubectl apply` 把 Phase A 版内容直接喂给集群，工作区文件不回退。这样下次复现 Phase B 时仓库文件仍是 Phase B 版，手册「配套文件已在仓库」成立。
+
+### 5.3 修改型：verify-all（teardown 验证用 Phase A 版临时跑）
+
+teardown 后集群是 Phase A 态（AM 1 副本），worktree 的 `verify-all.sh` 是 Phase B 版（含 HA/route 检查，在 Phase A 集群上会 FAIL）。所以 **teardown 验证用 Phase A 版临时跑**，工作区 Phase B 版保留不动：
 
 ```bash
-git checkout <phase-A-末态-commit> -- deploy/components/prometheusrule-core.yaml
-kubectl apply -f deploy/components/prometheusrule-core.yaml
+# 用 Phase A 版 verify-all 验证 Phase A 基线（git show 管道，不动 worktree 的 Phase B 版）
+git show origin/main:deploy/verify/verify-all.sh | bash
+# 预期: Summary: 18 passed, 0 failed
 ```
 
-或手动把两条 alert 的 expr 改回上面的单行原文（去掉 `* on(namespace,pod) group_left(node) kube_pod_info` 与 YAML `|` block scalar），再 `kubectl apply -f deploy/components/prometheusrule-core.yaml`。
-
-### 5.3 修改型：verify-all 回 Phase A 版本
-
-```bash
-git checkout <phase-A-末态-commit> -- deploy/verify/verify-all.sh
-# 恢复 Phase A 的 AM 单副本检查（去掉 HA + route 检查项）
-```
+> worktree 的 `verify-all.sh`（Phase B 版）**保留不动**——它是 Phase B 产物，下次复现直接用。
 
 ### 5.4 新建型：保留不删（部署产物，永久 git tracked）
 

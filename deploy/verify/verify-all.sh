@@ -41,9 +41,9 @@ check "cert-manager: 3 Pods Ready" \
   "[ \$(kubectl -n cert-manager get pods --no-headers | grep -c '1/1.*Running') -ge 3 ]"
 check "kube-prometheus-stack: 6+ Pods Ready" \
   "[ \$(kubectl -n monitoring get pods --no-headers | grep -cE '[0-9]+/[0-9]+.*Running') -ge 6 ]"
-# AM StatefulSet pod = alertmanager + config-reloader 两容器（operator 注入），故 2/2；加 sidecar 时同步改
-check "Alertmanager: Pod Ready（Phase A 单副本）" \
-  "kubectl -n monitoring get pods -l app.kubernetes.io/name=alertmanager --no-headers | grep -q '2/2.*Running'"
+# AM HA 检查委托 am-ha-check.sh（验 3 副本跨 3 节点拓扑 + PDB minAvailable:2）；Pod Running/Ready 由上方「6+ Pods Ready」兜底
+check "Alertmanager: 3 副本跨 3 节点 + PDB（Phase B quorum HA）" \
+  "deploy/verify/am-ha-check.sh"
 check "ArgoCD: 4+ Pods Ready" \
   "[ \$(kubectl -n argocd get pods --no-headers | grep -cE '[0-9]+/[0-9]+.*Running') -ge 4 ]"
 
@@ -60,6 +60,8 @@ check "Prometheus ServiceMonitors exist" \
 # L3: 功能
 check "PrometheusRule: KubeWorkerNodeNotReady 已被 Prometheus 加载" \
   "kubectl --request-timeout=10s get --raw '/api/v1/namespaces/monitoring/services/kube-prometheus-stack-prometheus:9090/proxy/api/v1/rules' | grep -q KubeWorkerNodeNotReady"
+check "Alertmanager: route 树 + severity 分流 + watchdog 独立 + inhibit（Phase B）" \
+  "deploy/verify/am-route-check.sh"
 check "kubectl top nodes works" \
   "kubectl top nodes >/dev/null 2>&1"
 check "echo-server reachable via Ingress" \

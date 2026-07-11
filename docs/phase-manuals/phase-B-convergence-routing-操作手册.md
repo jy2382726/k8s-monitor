@@ -240,6 +240,8 @@ kubectl -n monitoring wait statefulset/alertmanager-kube-prometheus-stack-alertm
 ## 3. 验收（三验收门断言）
 
 > ⚠️ **跑 AC-US2 / AC-NFR-02 前，必须重启 AM 清 group_wait 状态**（见排障 T7）。否则计数器不涨、delta=0 假 FAIL。AC-US5 synthetic 不受影响（每次注入新告警）。
+>
+> ✅ **背景污染已自动隔离**：assert 脚本会在注入前 auto-silence 所有活跃背景告警 + 探针自身（见排障 T11），所以即使集群有正在 firing 的告警（如 kube-proxy crashloop 触发的 `KubePodCrashLooping` 每 5m 通知一次）也不会污染 delta。你无需手动清背景，只需上面的 AM 重启（清 group_wait）。
 
 **前置：重启 AM 清状态 + 等突发流量稳定**
 
@@ -360,6 +362,19 @@ sleep 100   # 等重启后突发（Watchdog group_wait=0 + 真告警 group_wait=
 
 - **根因**：config-reloader 偶发没感知到 generated secret 变化。
 - **解法**：`kubectl -n monitoring rollout restart statefulset/alertmanager-kube-prometheus-stack-alertmanager`，等 3 副本 Ready 后重跑 `deploy/verify/am-route-check.sh`。
+
+### T11：AC-US2/AC-NFR-02 报 delta>1（如 delta=2/3），但前置闸过、active=N
+
+- **根因（重要，常被误判）**：**不是 HA 去重失效**。`notifications_total{integration="webhook"}` 是**全局聚合、无 alertname 维度**，40s 窗口内任何 webhook 通知都计入 delta。dedup 实际正常——诊断方法：查 per-replica 计数
+  ```bash
+  kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 19090:9090 &>/dev/null & sleep 2
+  curl -s -G http://localhost:19090/api/v1/query --data-urlencode 'query=alertmanager_notifications_total{integration="webhook"}' \
+    | python3 -c "import sys,json;d=json.load(sys.stdin);[print(r['metric'].get('pod'),r['value'][1]) for r in d['data']['result']]"
+  ```
+  若 per-replica **不等**（如 3/1/1）= leader-hash 分布 = **dedup 正常**，delta>1 是背景污染；若 **相等**（如 N/N/N）= 才是去重失效（查 Gossip 9094 / cluster_members）。
+- **污染源（实测）**：① 背景活跃告警——`kube-system/kube-proxy` crashloop（`too many open files`，kind 节点 fd 限制已知坑）触发 `KubePodCrashLooping`（info→default/webhook）每 `group_interval=5m` 通知一次；② 脚本自己的探针 `PhaseBConvProbe`（warning→dingtalk-markdown，group_wait=30s，resolve 用 `endsAt=00:00:00Z` 不可靠时在窗口内通知）。
+- **解法**：仓库版 assert 脚本已 **auto-isolate**——注入前为所有活跃背景告警 + 探针建临时 silence（trap exit 自动删）。silence 不影响 receivers 字段检查（路由计算与 silence 无关）。**确认用仓库最新脚本**（含 `isolate_background`）。若仍 delta>1：`kubectl get pods -A | grep -iE 'crashloop|oom'` 看有无新故障 Pod 产生未被 silence 的告警。
+- **附**：kube-proxy crashloop 与 Phase B 无关（其他节点 kube-proxy 正常），auto-isolate 让你**不用先修它**就能跑收敛验收。要治本可 `kubectl -n kube-system delete pod <kube-proxy-pod>`（DaemonSet 重建，fd 计数清零，可能暂时恢复）。
 
 ---
 

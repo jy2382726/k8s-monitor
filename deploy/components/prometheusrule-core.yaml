@@ -67,10 +67,7 @@ spec:
     - name: kubernetes-pod.rules
       rules:
         - alert: KubePodCrashLooping
-          # +node join：让 Pod 症状告警带 node label，供 06 §3.4 inhibit equal:[node] 抑制（AC-US5）
-          expr: |
-            (max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1)
-            * on(namespace, pod) group_left(node) kube_pod_info
+          expr: max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1
           for: 10m
           labels:
             severity: info
@@ -86,10 +83,7 @@ spec:
             summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} 长期 Pending/Unknown"
             description: "Pod 长期未 Running。排查：kubectl describe pod {{ $labels.pod }} -n {{ $labels.namespace }}；kubectl get events -n {{ $labels.namespace }} --sort-by=.lastTimestamp。"
         - alert: KubeContainerOOMKilled
-          # +node join：同上，供 inhibit equal:[node]
-          expr: |
-            (kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1)
-            * on(namespace, pod) group_left(node) kube_pod_info
+          expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
           for: 1m
           labels:
             severity: info

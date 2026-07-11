@@ -386,6 +386,24 @@ helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack \
 >   --for=jsonpath='{.status.readyReplicas}=1' --timeout=300s
 > ```
 
+#### 5.1.1 🔴 删除孤儿 AM PVC（必做，否则 §5.7 的 PVC=0 检查 FAIL）
+
+> ⚠️ **STS 缩容不自动删 PVC**（k8s 默认保留 PVC 防数据丢）。helm upgrade 去掉 `storage.volumeClaimTemplate` 后，AM pod-0 重建切回 emptyDir，但 Phase B 创建的 **3 个 5Gi PVC 成孤儿仍 Bound**。Phase A 末态 AM 用 emptyDir、无 PVC，必须手动删：
+
+```bash
+# 确认 pod-0 已切 emptyDir（不挂 PVC，否则别删）
+kubectl -n monitoring get pod alertmanager-kube-prometheus-stack-alertmanager-0 -o yaml | grep -A1 persistentVolumeClaim || echo "✓ pod-0 无 PVC 挂载（已切 emptyDir，可删孤儿 PVC）"
+
+# 删 3 个孤儿 AM PVC
+kubectl -n monitoring delete pvc -l app.kubernetes.io/name=alertmanager
+# 预期: persistentvolumeclaim "alertmanager-...-0" deleted / -1 / -2 deleted
+
+# 确认清零
+kubectl -n monitoring get pvc | grep -c alertmanager   # 预期: 0
+```
+
+> 若 `delete pvc -l ...` 因 PVC 无该 label 删不干净，按名删：`kubectl -n monitoring get pvc -o name | grep alertmanager | xargs kubectl -n monitoring delete`。
+
 ### 5.2 修改型：core-rules 回 Phase A 版本（去掉 node join）
 
 步骤 1 给 `KubePodCrashLooping` / `KubeContainerOOMKilled` 加了 node join。teardown 要改回 Phase A 原文 expr：

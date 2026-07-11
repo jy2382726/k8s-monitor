@@ -381,3 +381,36 @@ route 检查 L0 RED→GREEN 闭环；HA 检查维持 PASS；总数 18→19（+ro
 
 **Phase B 验收门①②（AC-US2 / AC-NFR-02）GREEN**：收敛 5→1（delta=1，HA 去重顺带验证）、风暴 20→2（收敛率 0.100）。route 树 + severity 分流 + inhibit_rules 一次配齐，verify-all 19/0。
 **关键坑**：断言脚本因 counter 累计噪声 + group_wait 状态保留，需**重启 AM 清状态 + 等突发稳定**才得确定性 GREEN（用户复现/手册必写）。
+
+---
+
+## Task 5: AC-US5 inhibit 集成测试（synthetic + --real）
+
+### 接管经过
+
+Task 4 implementer 撞 429 限流后，controller 接管 Task 5 全程（直接写脚本 + 跑断言，不再派 subagent——规避长跑 --real ~16m 撞限流风险）。
+
+### 脚本与坑
+
+创建 `deploy/verify/assert-inhibit.sh`（两层：synthetic 确定性闸 + --real 全链路）。
+**漂移⑦复发**：plan verbatim 的规则②注入（L822 `KubeWorkerNodeNotReady` + `KubePodCrashLooping` 对）用 `[[...]]` 双括号——同 Task 3 坑，AM API 拒 HTTP 400。写脚本时**直接修为 `[...]` 单括号**（规则①/cleanup 原本就是单括号，无需动）。加进 .gitignore 白名单。
+inject-fault.sh 接口核对：`not-ready <node>`（pkill -STOP kubelet）/ `cleanup not-ready <node>` / `cleanup --all [node]`，与 --real 模式调用一致。
+
+### synthetic 闸（AC-US5 确定性验收门，秒级）
+
+```
+▶ [synthetic] 规则①：critical 抑制同 namespace+alertname 的 warning
+  ✓ warning 被 critical 抑制（inhibitedBy=9db2f760326c753c）
+▶ [synthetic] 规则②：NotReady 抑制同 node 的 Pod 症状（equal:[node]，AC-US5 核心）
+  ✓ KubePodCrashLooping(node=k8s-monitor-dev-worker) 被 NotReady 抑制（inhibitedBy=9a345f3edcebc076）
+[PASS] AC-US5（synthetic）：inhibit 规则①② 均生效
+```
+**Phase B 验收门③（AC-US5）synthetic GREEN**：
+- 规则①（critical 抑制 warning，equal:[namespace,alertname]）生效 ✓
+- 规则②（**NotReady 抑制同 node Pod 症状，equal:[node]，AC-US5 核心**）生效 ✓ ——依赖 Task 2 的 kube_pod_info join 给 KubePodCrashLooping 补 node label，inhibit 才匹配上。整条链路（Task2 node join → Task4 inhibit② → 抑制）闭环验证。
+
+### --real 全链路（design ⑥ 集成测试，~16m，非确定红绿）
+
+（后台运行中，结果后补——见下方「--real 结果」）
+
+机制：部署真 CrashLoop pod 到 worker（nodeName 强制带 node）→ 等 KubePodCrashLooping firing(for:10m) → pkill -STOP kubelet → 等 KubeWorkerNodeNotReady firing(for:5m) → 查真 KubePodCrashLooping 的 status.inhibitedBy 非空。验 Task2 join + Task4 inhibit② 在**真告警**链路下生效（synthetic 验配置层，--real 验端到端）。

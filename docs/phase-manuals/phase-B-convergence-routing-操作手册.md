@@ -52,6 +52,12 @@ kubectl get secret -n monitoring
 
 **阶段开始态** = M1 基座 + **Phase A 产物**（AM 单副本 + 15 条规则已部署、AC-US1-01 已通过）。本阶段无前置 OQ（OQ-3 oncall 在本期 §2 步骤 2 就地用占位值闭环、OQ-8 HA 边界在 §1.5 声明）。
 
+> ⚠️ **最高优先前提——工作目录须在 Phase B 分支的 checkout 内**（详见 §2 开头）：
+> 本手册所有 `kubectl apply -f deploy/...` / `helm upgrade -f ...` / `./deploy/verify/...` 命令依赖 Phase B 文件
+> （`values-phase-B.yaml`、带 `kube_pod_info` join 的 `prometheusrule-core.yaml`、新 verify 脚本等）。
+> **项目根目录 `~/projects/k8s-monitor` 在 `main` 分支、未合并 Phase B**，在其中执行会部署到 Phase A 旧版
+> （AC-US5 --real 必在 Task2 `node=(none)` 栽，2026-07-12 实测踩过）。开工先跑下方自检确认目录对。
+
 ### 1.1 集群在活且基线绿
 
 ```bash
@@ -116,7 +122,15 @@ wc -l /tmp/phase-B-start-baseline.txt
 
 ## 2. 部署步骤（每步 = 命令 + 预期输出，可整段复制粘贴）
 
-> 全程在仓库根执行。配套文件已在 `deploy/`，直接用。
+> ⚠️ **工作目录前提（必读，否则部署到 Phase A 旧版）**：以下全部命令须在 **Phase B 分支的 checkout 目录**内执行
+> ——即含 `deploy/components/values-phase-B.yaml` 的目录（本机为 worktree `…/.claude/worktrees/phase-B-rehearsal`）。
+> **不要在项目根目录 `~/projects/k8s-monitor`（main 分支）执行**：该目录未合并 Phase B（无 `values-phase-B.yaml`、
+> `prometheusrule-core.yaml` 无 `kube_pod_info` join），在其中 `kubectl apply` 会部署到 Phase A 旧版。
+> 开工前先自检目录（两条都过才能继续）：
+> ```bash
+> test -f deploy/components/values-phase-B.yaml && echo "✓ 在 Phase B 目录" || echo "✗ 错目录！请 cd 到 Phase B checkout"
+> grep -c kube_pod_info deploy/components/prometheusrule-core.yaml   # 预期: 2（node join 在；=0 说明是 Phase A 旧版）
+> ```
 
 ### 步骤 1：core-rules 加 node label（inhibit 前置）
 
@@ -289,11 +303,14 @@ delta=1（纯收敛）或 2（1 收敛 + ≤1 背景残余噪声）都算 PASS�
 ### 3.4 长耗时降级：AC-US5 --real 全链路（~17m，用户可跳过）
 
 > 按 `docs/14` §3.3 长耗时验收降级规则：`--real` 模式（真 CrashLoop pod + pkill -STOP kubelet，~17m，非确定红绿 + 改节点 kubelet 状态）**留 agent 预演，用户复现跳过即可**（§3.3 synthetic 闸已确定性达标）。要跑：
+>
+> ⚠️ **两个前置**：① 工作目录必须在 Phase B checkout（§2 开头，否则 Task2 `node=(none)`）；② §2 步骤1 的 joined core-rules 已 apply 进集群（否则 KubePodCrashLooping 无 node label）。脚本中断/超时会自动 `pkill -CONT kubelet`（trap 兜底）。
+> （2026-07-12 agent 已验证 GREEN：KubeWorkerNodeNotReady T0+380s active，KubePodCrashLooping 被 inhibit。）
 
 ```bash
 ./deploy/verify/assert-inhibit.sh --real k8s-monitor-dev-worker
 # 部署真 CrashLoop pod → 等 KubePodCrashLooping firing(11m) → pkill -STOP kubelet →
-# 等 KubeWorkerNodeNotReady firing(6m) → 验真 KubePodCrashLooping 被抑制 → cleanup
+# 轮询等 KubeWorkerNodeNotReady active(≤9min，典型 T0+380s≈6m20s) → 验真 KubePodCrashLooping 被抑制 → cleanup
 # 预期: [PASS] AC-US5（real）：KubePodCrashLooping 被 NotReady 抑制（inhibitedBy=<fingerprint>）
 # 跑完务必确认 worker 恢复: kubectl get node k8s-monitor-dev-worker -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'  # 应 True
 ```
@@ -521,7 +538,7 @@ diff /tmp/phase-B-start-baseline.txt /tmp/phase-B-after-teardown.txt
 | AC-NFR-02（风暴收敛率）| `assert-storm.sh 20` | ✅ PASS — 20→1，收敛率=0.050 |
 | AC-US5（抑制 synthetic）| `assert-inhibit.sh` | ✅ PASS — 规则①(critical→warning) + ②(NotReady→同node Pod) 均生效 |
 
-AC-US5 `--real` 全链路留 agent 预演（按 §3.4 降级），用户复现只验 synthetic 闸。
+AC-US5 `--real` 全链路按 §3.4 降级留 agent 预演，用户复现只验 synthetic 闸。**2026-07-12 补**：agent 已跑通 `--real` GREEN（KubeWorkerNodeNotReady T0+380s active，KubePodCrashLooping 被 NotReady 抑制，inhibitedBy=e07ae90b…），详见预演日志《闭环⑤后扩展：AC-US5 --real 三轮调试复盘》——该次扩展验证暴露并修复了 3 处问题（core-rules join 因目录错漂移 / 脚本盲等 6min / poll 状态名 firing≠active）。
 
 ### 与手册的偏差（复现实测发现 + 已修复）
 

@@ -2,6 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: 用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 逐 task 执行本计划。步骤用 checkbox（`- [ ]`）跟踪。
 
+> ⚠️ **v1.0 勘误（2026-07-11，闭环② agent 预演发现 5 处缺陷，已就地修正部署并定稿入手册；正文保留历史不动）**——**照本 plan 原文抄会踩坑，实际部署以 `docs/phase-manuals/phase-A-alert-rules-操作手册.md`（定稿 + 附录 A）为准**：
+> 1. **KSM values 键名**：正文 `kubeStateMetrics.metricLabelsAllowlist`（camelCase）无效 → 正确 `kube-state-metrics.metricLabelsAllowlist`（subchart 键，带连字符）。
+> 2. **role label 位置**：正文断言 role label 在 `kube_node_status_condition` → 实测 KSM v2.19.1 只暴露在 `kube_node_labels{label_role}`，3 条 node-role 规则须改 `* on(node) group_left(label_role)` join。
+> 3. **EtcdInsufficient job label**：正文 `up{job="etcd"}`（0 series 死规则）→ 正确 `up{job="kube-etcd"}`（kps scrape job 真名）。
+> 4. **AM `/api/v2/alerts`**：正文当 dict 解析 → 实测顶层是 list，assert-firing.sh 须 `isinstance(d,list)` 守卫。
+> 5. **笔误**：verify AM 检查 `1/1`（实 2/2）/ preload-images.sh 行尾逗号在引号内 / 部分规则缺 description。
+> 另：注入 NotReady 用 `docker exec <node> pkill -STOP kubelet`（**非 cordon**——cordon 只设 unschedulable、不改 Ready，见 PRD AC-US1-01 勘误注 / 手册 §4-T5）。
+
 **Goal（目标）**：打通「规则→评估→firing 可见」链路——启用 Alertmanager（临时单副本）、部署 10–15 条核心告警规则（独立 PrometheusRule CR）、verify-all 增加规则评估检查、建 `inject-fault.sh` 故障注入框架；**验收门 = 让一 worker 节点持续 NotReady 5m → `KubeWorkerNodeNotReady` 在 Alertmanager firing 可见**（PRD AC-US1-01 前半段，完整 AC-US1 推迟 Phase C/F）。
 
 **Architecture（架构）**：

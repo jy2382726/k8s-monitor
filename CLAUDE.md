@@ -40,6 +40,11 @@
 > 改组件前**必先** `helm template <chart> <ver> --version <x> | grep image:` 核对实际镜像 tag，否则 ImagePullBackOff。
 > 版本映射权威见 `deploy/preload-images.sh` 顶部镜像清单注释。
 
+> ⚠️ **监控规则/查询编写必知（Phase A 实测，写 PrometheusRule / PromQL / AM 查询前必看）**：
+> - **KSM v2.19.1 `metric-labels-allowlist` 只把 label 暴露到 `kube_<resource>_labels` 系列**（如 `kube_node_labels{label_role=...}`），**不传播**到其他 metric（`kube_node_status_condition` 上没有 role label）。按 node role 过滤的规则须用 `(kube_node_status_condition{...}==1) * on(node) group_left(label_role) kube_node_labels{label_role="..."}` join，不能直接写 `kube_node_status_condition{role="..."}`。
+> - **kps scrape job label 实测真名**：`apiserver` / `kube-etcd` / `kubelet` / `node-exporter` / `kube-state-metrics` 等（**不是裸 `etcd`**）。写 `up{job="..."}` 类规则前先 `count by(job)(up)` 核对真实 job 名，否则匹配 0 series 成死规则。
+> - **Alertmanager `/api/v2/alerts` 返回顶层是 `list`**（非 `{"alerts":[...]}` dict）。解析脚本用 `isinstance(d,list)` 守卫，别 `d.get('alerts',[])`。
+
 ## 4. 明确不做（Non-Goals，🔒 禁止重开）
 
 来自 PRD §2.3/§5.2、06 §2、mvp-scope §1.3。**不要提议以下任何方向**：

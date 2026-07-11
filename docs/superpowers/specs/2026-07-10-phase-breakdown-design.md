@@ -74,7 +74,7 @@ graph LR
 
 - **① 范围 (M)**：**M2**（核心告警规则集）＋ M1 的 AM 启用为**临时单副本** ＋ M15 的 verify-all 增项 ＋ 故障注入框架 `inject-fault.sh`。横切：M1 调优（AM 资源配额随启用带入）。
 - **② 目标与交付**：打通「规则→评估→firing 可见」链路。交付 `PrometheusRule`（10–15 条核心规则：节点/Pod/工作负载/容量/控制面）＋ Alertmanager 单副本 ＋ verify-all 规则评估检查 ＋ `inject-fault.sh`（预留 NotReady / CrashLoop / OOM / PodPending / 控制面 5 类接口 ＋ `cleanup` 子命令）。
-- **③ 验收门**：agent 预演技术门 = cordon 一 worker 节点持续 5m → `KubeWorkerNodeNotReady` 在 Alertmanager **firing 可见**。对应 PRD = **AC-US1 的前半段**（触发成功）；完整 AC-US1（ActionCard 送达 + MTTD≤6min）显式推迟 Phase C/F。
+- **③ 验收门**：agent 预演技术门 = 对一 worker 节点 `docker exec <node> pkill -STOP kubelet` 暂停心跳（~40s 后 NotReady）持续 5m → `KubeWorkerNodeNotReady` 在 Alertmanager **firing 可见**（⚠️ 不用 cordon——cordon 只设 `unschedulable`、不改 `Ready`，预演实测勘误，见 PRD AC-US1-01 注 / 手册 §4-T5）。对应 PRD = **AC-US1 的前半段**（触发成功）；完整 AC-US1（ActionCard 送达 + MTTD≤6min）显式推迟 Phase C/F。
 - **④ 前置 OQ / 依赖**：**无 hard blocker**（AM 单副本不依赖排班）。前置 = M1 基座已就绪（已核查：`alertmanager.enabled:false`、无任何 PrometheusRule/AlertmanagerConfig/dingtalk 配置）。OQ-8（kind HA 限制）边界声明留 Phase B。
 - **⑤ teardown 资源类型**：**新建型**——`PrometheusRule` CRD `kubectl delete`、`inject-fault.sh` 测试 Pod `delete`；**修改型**——AM 启用改了 kps values，teardown = `helm upgrade -f` 回 `alertmanager.enabled:false` 的 M1 基座态；凭据型：无。
 - **⑥ IaC-TDD 类型**：**L0**（verify-all 规则评估检查：可 RED-first，先写检查必 FAIL→实现→PASS）＋ **L1**（firing 是行为契约：先写「注入 NotReady→查 AM API 有 firing」断言脚本再配规则；`for:5m` 时序敏感，红绿可能模糊）。

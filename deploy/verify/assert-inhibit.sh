@@ -23,7 +23,8 @@ warn(){ printf "${Y}⚠ %s${N0}\n" "$*"; }
 
 kubectl -n "$NS" port-forward svc/kube-prometheus-stack-alertmanager 19093:9093 &>/dev/null & AM=$!
 sleep 3
-cleanup(){ kill $AM 2>/dev/null; }
+KUBELET_STOPPED=""   # --real 若 STOP 过 kubelet，记节点名；trap 兜底 CONT（防脚本被中断/超时杀掉时 kubelet 残留 STOP）
+cleanup(){ [ -n "$KUBELET_STOPPED" ] && docker exec "$KUBELET_STOPPED" pkill -CONT kubelet 2>/dev/null; kill $AM 2>/dev/null; }
 trap cleanup EXIT
 
 am_post(){ curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" --max-time 8 "http://localhost:19093/api/v2/alerts" -d "$1"; }
@@ -115,9 +116,28 @@ print(next((a['labels'].get('node','(none)') for a in d if a['labels'].get('aler
   info "  KubePodCrashLooping firing? node=$cl_node, 抑制前 inhibitedBy=$cl_inh"
   [ "$cl_node" = "$WORKER" ] || { printf "${R}[FAIL] Task 2 node join 未生效：KubePodCrashLooping node='%s'（期望 $WORKER）${N0}\n" "$cl_node"; kubectl -n e2e-test delete pod inhibit-crashloop --ignore-not-found >/dev/null; return 1; }
 
-  info "[3/5] 注入 NotReady（pkill -STOP kubelet @ $WORKER）+ 等 KubeWorkerNodeNotReady firing（for:5m+grace≈6m）"
+  info "[3/5] 注入 NotReady（pkill -STOP kubelet @ $WORKER）+ 轮询等 KubeWorkerNodeNotReady firing"
   "$INJECT" not-ready "$WORKER"
-  sleep $((6 * 60))
+  KUBELET_STOPPED="$WORKER"   # 交 trap 兜底（脚本中断/超时也能 CONT 回来）
+  # ⚠️ 不盲等 6min：节点检测 ~90s（node-monitor-grace）+ KSM scrape 30s + for:5m ≈ T0+7min 才 fire，
+  #    旧版 sleep 6min 检查太早 → source 告警仍 pending → inhibit 匹配 0（实测 Task4 必 FAIL）。
+  nr_fired=0
+  for i in $(seq 1 27); do   # 27×20s = 9min 上限
+    sleep 20
+    nr_st=$(curl -s --max-time 8 "http://localhost:19093/api/v2/alerts" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+print(next((a['status']['state'] for a in d if a['labels'].get('alertname')=='KubeWorkerNodeNotReady' and a['labels'].get('node')=='$WORKER'), 'absent'))" 2>/dev/null)
+    # ⚠️ AM 的 status.state 取值是 active/unprocessed/suppressed（≠ Prometheus 的 "firing"）。
+    #    等 active（=已过 group_wait、firing 中、可作 inhibit source）。
+    if [ "$nr_st" = "active" ]; then nr_fired=1; printf "${G}  ✓ KubeWorkerNodeNotReady active(=firing)（T0+$((i*20))s 轮询命中）${N0}\n"; break; fi
+  done
+  if [ $nr_fired -eq 0 ]; then
+    printf "${R}[FAIL] KubeWorkerNodeNotReady 9min 内未 firing（排查：节点是否真 NotReady / Prom 规则评估 / for:5m）${N0}\n"
+    "$INJECT" cleanup not-ready "$WORKER"; KUBELET_STOPPED=""
+    kubectl -n e2e-test delete pod inhibit-crashloop --ignore-not-found >/dev/null
+    return 1
+  fi
 
   info "[4/5] 查 KubePodCrashLooping 是否被 NotReady 抑制"
   nr_fp=$(fingerprint_of KubeWorkerNodeNotReady node "$WORKER")
@@ -131,7 +151,7 @@ print(next((a['labels'].get('node','(none)') for a in d if a['labels'].get('aler
   fi
 
   info "[5/5] cleanup（CONT kubelet + 删 inhibit-crashloop）"
-  "$INJECT" cleanup not-ready "$WORKER"
+  "$INJECT" cleanup not-ready "$WORKER"; KUBELET_STOPPED=""
   kubectl -n e2e-test delete pod inhibit-crashloop --ignore-not-found >/dev/null
   return $RC
 }

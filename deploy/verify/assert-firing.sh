@@ -57,7 +57,8 @@ if [ "$RC" -ne 0 ]; then
   echo "  排查：1) 节点是否真的 NotReady（kubectl get node $WORKER）；"
   echo "        2) 规则是否加载 + 评估无错；"
   echo "        3) role=worker label 是否在 kube_node_labels（Task 1 核实，规则用 join）；"
-  echo "        4) AM 是否收得到告警（kubectl -n $NS logs statefulset/kube-prometheus-stack-alertmanager）。"
+  echo "        4) AM 是否收得到告警（kubectl -n $NS logs alertmanager-kube-prometheus-stack-alertmanager-0）。"
+  echo "        5) AM pod 是否在你要注入的 $WORKER 节点上（kubectl -n $NS get pods -l app.kubernetes.io/name=alertmanager -o wide）——若是，AM 被 NotReady 困住、告警送不进；等它漂到别的节点或 delete pod 重建后再重跑（手册 §4-T9）。"
 fi
 
 info "[3/3] cleanup（恢复 worker 节点）"

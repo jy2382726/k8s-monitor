@@ -179,8 +179,9 @@ kill $PF 2>/dev/null
 预期：
 ```
 [PASS] Alertmanager: Pod Ready（Phase A 单副本）
-Summary: 17 passed, 0 failed
+Summary: 17 passed, 1 failed
 ```
+> 这 1 个 FAIL 是 `PrometheusRule: KubeWorkerNodeNotReady 已被 Prometheus 加载` 检查——该检查项已在 verify-all.sh 里（Phase A 增量），但你此刻还没 apply 规则（步骤 2 才 apply），所以它 FAIL 属**预期 RED**。做完步骤 2 后此检查转 PASS、Summary 变 `18 passed, 0 failed`。
 
 ---
 
@@ -278,6 +279,17 @@ kubectl get node k8s-monitor-dev-worker -o jsonpath='{.status.conditions[?(@.typ
 ---
 
 ### 步骤 5：验收门 ⭐（inject not-ready → 轮询 AM 最多 8m → firing 可见 → cleanup）
+
+> ⚠️ **跑前必查：AM pod 不能在你将注入的 worker 节点上**。单副本 AM 无反亲和，若 AM 恰在 worker，你一注入 NotReady，AM pod 会被 stranded/驱逐、告警 8m 内送不进去 → 误 FAIL（见 §4-T9，复现实测命中）。先确认：
+> ```bash
+> kubectl -n monitoring get pods -l app.kubernetes.io/name=alertmanager -o wide
+> ```
+> `NODE` 列是 `k8s-monitor-dev-worker2`（或 control-plane）就放心；若不幸在 `k8s-monitor-dev-worker`，先赶走再等重建：
+> ```bash
+> kubectl -n monitoring delete pod -l app.kubernetes.io/name=alertmanager   # StatefulSet 重建到别的节点
+> kubectl -n monitoring wait pod -l app.kubernetes.io/name=alertmanager --for=condition=Ready --timeout=120s
+> ```
+> （根治在 Phase B：3 副本 AM + 反亲和，单节点 NotReady 不丢投递。）
 
 ```bash
 ./deploy/verify/assert-firing.sh k8s-monitor-dev-worker
@@ -407,6 +419,12 @@ Summary: 18 passed, 0 failed
 
 - **根因**：Alertmanager `/api/v2/alerts` 顶层是 list，旧解析 `d.get('alerts',[])` 对 list 抛 AttributeError 被 `2>/dev/null` 吞。
 - **解法**：仓库脚本已修（`isinstance(d,list)` 守卫）。`[PASS]` 判定基于 grep（与 python 解析无关），出现 `[PASS]` 即验收门通过；详情行不打印不影响判定，但建议用仓库最新脚本看完整输出。
+
+### T9：验收门 8m 后 [FAIL]，但规则明明 `pending`/`firing`（告警没送进 AM）⭐ 复现实测命中
+
+- **根因**：单副本 AM 无反亲和，AM pod 恰好在你注入 NotReady 的 worker 节点上 → worker 一 NotReady，AM pod 被 stranded（节点级 pod-eviction）→ Prometheus 那段时间投递告警全失败，AM API 查不到 `KubeWorkerNodeNotReady`。AM pod 中途重建（pod `AGE` 远小于 AM CR `AGE`）+ 漂到别的节点，是铁证。预演能过、复现挂，多半就是 AM 落点不同。
+- **诊断**：① 规则 `state=pending`（Prometheus 里 fire 了）但 AM API 查不到 → 投递失败；② `kubectl -n monitoring get pods -l app.kubernetes.io/name=alertmanager -o wide` 看 AM 在哪个节点；③ `kubectl -n monitoring describe pod alertmanager-kube-prometheus-stack-alertmanager-0 | grep -A8 Events` 看有无 `NodeNotReady`/`TaintManagerEviction`。
+- **解法**：等 AM pod 漂到非注入节点稳定后重跑 gate；或主动 `kubectl -n monitoring delete pod -l app.kubernetes.io/name=alertmanager` 逼它重建到别的节点，等 2/2 Running 再重跑。**跑 gate 前按步骤 5 预检确认 AM 不在 worker 上，可避免踩此坑。根治在 Phase B：3 副本 AM + 反亲和 + PDB。**
 
 ---
 

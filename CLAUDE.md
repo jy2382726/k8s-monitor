@@ -29,7 +29,7 @@
 |---|---|---|
 | kind 节点 | kindest/node v1.31.14 | 3 节点（control-plane + 2 worker） |
 | kube-prometheus-stack | chart **87.2.1** | Prom **v3.12.0** · operator v0.92.0 · node-exporter v1.11.1 · KSM v2.19.1 · Grafana 13.1.0 |
-| Alertmanager | 3 副本 quorum（kps 内置） | PDB minAvailable:2 · Gossip 9094 TCP+UDP |
+| Alertmanager | 3 副本 quorum（kps 内置） | PDB minAvailable:2 · Gossip 9094 TCP+UDP · ⚠️kind 硬反亲和须 toleration control-plane（仅 2 无 taint worker） |
 | ArgoCD | chart **10.1.2**（redis 8.2.3-alpine） | polling 模式，不暴露公网 webhook |
 | cert-manager | v1.20.2 | |
 | ingress-nginx | controller v1.15.1 | nodeSelector 匹配 `ingress-ready` 节点 |
@@ -44,6 +44,8 @@
 > - **KSM v2.19.1 `metric-labels-allowlist` 只把 label 暴露到 `kube_<resource>_labels` 系列**（如 `kube_node_labels{label_role=...}`），**不传播**到其他 metric（`kube_node_status_condition` 上没有 role label）。按 node role 过滤的规则须用 `(kube_node_status_condition{...}==1) * on(node) group_left(label_role) kube_node_labels{label_role="..."}` join，不能直接写 `kube_node_status_condition{role="..."}`。
 > - **kps scrape job label 实测真名**：`apiserver` / `kube-etcd` / `kubelet` / `node-exporter` / `kube-state-metrics` 等（**不是裸 `etcd`**）。写 `up{job="..."}` 类规则前先 `count by(job)(up)` 核对真实 job 名，否则匹配 0 series 成死规则。
 > - **Alertmanager `/api/v2/alerts` 返回顶层是 `list`**（非 `{"alerts":[...]}` dict）。解析脚本用 `isinstance(d,list)` 守卫，别 `d.get('alerts',[])`。
+> - **KSM `kube_pod_container_status_*` 系列 metric 无 `node` label**（labels 只有 container/namespace/pod/uid）。规则要用 node 维度（如 inhibit `equal:[node]` 抑制同节点 Pod 症状）须 join：`(...) * on(namespace,pod) group_left(node) kube_pod_info`（kube_pod_info 含 node，每 pod 1 series，多对一安全）。不 join 则 inhibit 匹配 0。
+> - **AM `alertmanager_notifications_total{integration="webhook"}` 无 `alertname`/`receiver` label**（全局聚合计数器，不区分通知来自哪个告警/receiver）。用它 delta 验"某类告警收敛成 1 条"会被背景活跃告警污染 → 须 auto-silence 背景 + sleep 等 propagate + 断言放宽（详见 memory `project_am_notification_test_pitfalls`）。硬验收看触达内容（Phase C 钉钉消息）。
 
 ## 4. 明确不做（Non-Goals，🔒 禁止重开）
 
@@ -100,7 +102,7 @@ wsl --shutdown
 
 ## 7. 本地环境坑（细节见 auto-memory）
 
-本机五类坑（7890 代理泄漏 / 镜像源 / docker save digest / 节点 restart policy / Pod netns wedge）的
+本机六类坑（7890 代理泄漏 / 镜像源 / docker save digest / 节点 restart policy / Pod netns wedge / kube-proxy fd crashloop）的
 **机制与诊断已详记于 auto-memory**，按需调取。此处只留改 `deploy/` 时必须立刻知道的最小事实 + 源文件指针：
 
 - **节点 `on-failure`、`kind-registry` `always`**：挂机后 3 节点不自动起，开机必 `docker start` 3 节点（见 §6 命令）。
@@ -108,6 +110,7 @@ wsl --shutdown
   7890 代理泄漏由 `containerd-no-proxy.conf`（`NO_PROXY=*`）绕过。详见各 `deploy/containerd-certs.d/*/hosts.toml`。
 - **Pod netns wedge**（kind#2045）由 `recover.sh` 自愈（L1 重启网络面 → L2 重启涉及 deploy）；修复 = `rollout restart` 目标，不是重启节点。
 - **`verify-all.sh` 的 curl 检查带 `--max-time` 超时**：新增检查项时保持此约定，勿让脚本无限挂起。
+- **kube-proxy fd crashloop（kind worker 节点）**：`kube-system/kube-proxy-<worker>` 偶发 `CrashLoopBackOff`（`too many open files`，kind 节点 fd 限制），持续触发 `KubePodCrashLooping` 背景告警噪声。不影响集群功能，但污染 `notifications_total` 类收敛测试（见 memory `project_am_notification_test_pitfalls`）。治本可 `kubectl -n kube-system delete pod <kube-proxy-pod>` 重建清 fd。
 
 ## 8. 工作流（action-oriented）
 

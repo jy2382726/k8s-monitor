@@ -231,3 +231,84 @@ labels = ['container', 'endpoint', 'instance', 'job', 'namespace', 'node', 'pod'
 
 **join 生效**：① Prometheus 加载两条新 expr 无评估错误；② 即时查询实测 series 含 node label（当前集群有 1 个 CrashLoop pod，命中真实数据）。Task 5 注入故障 pod 后 inhibit `equal:[node]` 抑制匹配所需的 node label 前置已就绪。
 
+
+---
+
+## Task 3: AC-US2 收敛 + AC-NFR-02 风暴断言（RED）
+
+### 脚本机制
+
+两个断言脚本共用同一套机制，差异只在断言阈值：
+
+| 脚本 | AC | 默认 N | 阈值 |
+|---|---|---|---|
+| `assert-convergence.sh` | AC-US2（收敛=1） | 5 | `notifications_total{integration=webhook}` 增量 == 1 |
+| `assert-storm.sh` | AC-NFR-02（风暴护栏） | 20 | 增量 ≤ 2 **且** 收敛率 delta/N ≤ 0.15 |
+
+**机制链路**：
+1. `port-forward` AM(19093) + Prometheus(19090)；
+2. **前置 RED 闸**：注入 1 个 warning 探针（`alertname=PhaseBConv/StormProbe, ns=e2e-test, severity=warning`）→ 3s 后查 `/api/v2/alerts` 读其 `receivers[].name` → 期望 `dingtalk-markdown`（Task 4 配 route 后）。当前 receiver=`null` → 前置闸秒级 FAIL（不必等 40s group_wait）。
+3. **主断言**：`POST /api/v2/alerts` 一次性注入 N 个合成告警（同 `alertname/namespace/severity`、`pod` 各异）→ baseline 记 `sum(notifications_total{integration=webhook})` → `sleep 40`（= `group_wait 30s` + dispatch 余量）→ 再读计数算 delta。
+4. **cleanup**：对主告警 + 探针都 `POST endsAt` 过去时间戳 → AM 标 resolved。
+
+绕过 Prometheus 规则的 `for` 计时（直接喂 AM），`group_wait` 后 AM 按 `group_by` 收敛 → 用 notifications 增量证明「N→1」。
+
+### 坑：verbatim 探针 payload 的 `[[...]]` 双括号 → AM 400（断言须实测核验）
+
+照 plan 全文写入后实测发现**前置闸一直返回 `(none)`**，初判 3s race。进一步 trace（手动注入同 payload → 抓 HTTP code）才发现：
+
+```
+=== [[...]] (verbatim) ===
+code=400  {"code":400,"message":"parsing alerts body ... json: cannot unmarshal array into Go value of type struct {Annotations...}"}
+=== [...] (单括号) ===
+code=200  → 3s 后 receivers=[{'name':'null'}]   ← 真实路由结果
+```
+
+**根因**：plan 给的探针 payload 外层是 `[[...]]`（双嵌套数组），AM API 期望 `[{...}]`（单括号 alert 数组）。`[[{...}]]` 被 AM 尝试把内层数组解为一个 alert struct → 400，告警**从未创建** → `receivers_of` 永远空集 → `(none)`。
+
+**为何必须修（不能「RED 就 RED 算了」）**：这是 L1 RED→GREEN 工作流。若留 bug，Task 4 配好 route 后探针**仍然 400** → 前置闸仍 `(none)` → **永远 RED，阻塞 GREEN**，断言等于没测路由。违反「断言须实测核验」（memory：Phase A 七处踩坑皆源于想当然）。
+
+**修法**（surgical，仅括号）：4 处手写探针 payload `[[...]]` / `[[...}]]` → `[...]`（`[{\"labels\":...,\"starts/endsAt\":\"...\"}]`）。主注入/主 cleanup 走 python `json.dumps([{...}])` 本就是单括号，未动。
+
+### Step 3 实测 RED 输出（修正后）
+
+修括号后两脚本都因**正确原因** RED（receiver=`null`，非注入失败）：
+
+**assert-convergence.sh 5**（exit 1）：
+```
+▶ [1/5] 前置（RED 闸）：warning 探针应路由到 dingtalk-markdown（Task 4 配 route 后）
+[FAIL] route 未配或未分流：warning 探针路由到 'null'（期望 dingtalk-markdown）。先跑 Task 4。
+```
+
+**assert-storm.sh 20**（exit 1）：
+```
+▶ [1/4] 前置（RED 闸）：warning 探针应路由到 dingtalk-markdown
+[FAIL] route 未配：探针路由 'null'（期望 dingtalk-markdown），先跑 Task 4
+```
+
+> receiver=`null` 即 kps 默认 config 的 `route.receiver: "null"`（已用 AM `/api/v2/status` 确认：`route.receiver="null"`、无 `dingtalk-markdown` receiver、`group_by` 为空、`group_wait=30s`）。这正是 Task 4 要改的目标态。
+
+### .gitignore 白名单补丁（漂移⑥教训应用）
+
+`.gitignore` 有 `deploy/verify/*` 整目录忽略 + `!` 反向白名单纳管源码脚本。新建两个断言脚本必须加白名单，否则 `git add` 加不进来（Task 1 漂移⑥同款坑）：
+
+```diff
+ !deploy/verify/am-ha-check.sh
++!deploy/verify/assert-convergence.sh
++!deploy/verify/assert-storm.sh
+ !**/.gitkeep
+```
+
+`git check-ignore` 对两脚本 exit=1（= 未被忽略），白名单生效。
+
+### Step 4：commit
+
+- SHA：`bcc2b0e`
+- 文件：`.gitignore`（+2 白名单）、`deploy/verify/assert-convergence.sh`（新建）、`deploy/verify/assert-storm.sh`（新建）；3 files changed, +129
+- 两脚本均 `chmod +x` + `bash -n` 通过；都含 `set -uo pipefail` + `trap cleanup EXIT`（port-forward 不泄漏）+ 所有 curl `--max-time 8`。
+
+### Task 3 结论
+
+**RED 成立**：两脚本前置闸均 FAIL（receiver=`null` ≠ `dingtalk-markdown`，exit 1），符合 L1 预期——Task 4 配 route + 建 `dingtalk-markdown` receiver 后前置闸才会过、主断言才会跑。前置闸秒级 FAIL，无需等 40s。
+
+**偏差申报**：修了 plan verbatim 的 `[[...]]` 双括号 bug（→ `[...]`），否则断言永不 GREEN、阻塞 Task 4。修正仅限括号，逻辑零改动。

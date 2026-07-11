@@ -482,3 +482,54 @@ Phase B 部署态基线全绿（HA + route 双检查 PASS，其余 17 项维持�
 ### Task 6 结论
 
 Phase B 部署完成态就绪：15 规则无评估错误、三验收门全 GREEN、verify-all 19/0、阶段开始态快照已存（teardown diff 基准）。预演部署部分（闭环②）完成。
+
+---
+
+## 闭环② agent 预演总结
+
+### 三交付物（缺一不可，均已就位）
+
+| # | 交付物 | 状态 | 路径 |
+|---|---|---|---|
+| ① | 部署跑通验收门 | ✅ AC-US2/AC-NFR-02/AC-US5 全 GREEN | 见各 Task |
+| ② | 操作手册草稿 | ✅ 517 行 | `docs/phase-manuals/phase-B-操作手册-草稿.md` |
+| ③ | 预演日志（脱敏）| ✅ 实时落盘 | 本文件 |
+
+### 三验收门结果
+
+| 门 | AC | 结果 | 证据 commit |
+|---|---|---|---|
+| ① 收敛 | AC-US2 | ✅ 5→1，delta=1（HA 去重顺带验证）| 793bec9 |
+| ② 风暴 | AC-NFR-02 | ✅ 20→2，收敛率 0.100 | 793bec9 |
+| ③ 抑制 | AC-US5 synthetic | ✅ 规则①②生效 | 14e7457 |
+| ③ 抑制 | AC-US5 --real | ✅ 真链路 NotReady 抑制 Pod 症状 | d105ba2 |
+
+### plan 漂移汇总（7 处，均已纠正 + 回写手册 §4）
+
+| # | 漂移 | 影响 Task |
+|---|---|---|
+| ① | helm Revision（plan 写 2→3，实测 7→10）| 1/4 |
+| ② | AM STS 真名带 `alertmanager-` 前缀（plan 漏前缀）| 1 |
+| ③ | am-ha-check jsonpath `.nodeName`→`.spec.nodeName` | 1 |
+| ④ | topologySpreadConstraints 缺 `whenUnsatisfiable`（server-side apply 拒）| 1 |
+| ⑤ | PDB 查询：plan `-l label` 选不到（PDB 自身无此 label）→ 按名 grep | 1 |
+| ⑥ | `.gitignore` 白名单（新脚本须加 `!`）| 1/3/4/5 |
+| ⑦ | assert 脚本 probe payload `[[...]]` 双括号（AM API 拒 400）→ `[...]` | 3/5 |
+| ⭐ | group_wait 状态保留：跑验收门①②前须重启 AM 清状态（plan 未预见）| 4 |
+
+> 7 处漂移印证 memory「plan 断言须实测核验」——尤其 ④⑤⑦ 是 k8s API/AM API 行为层，plan 编写时未做 server-side apply / 真注入实测，靠预演真实部署才抓到。
+
+### 执行方式
+
+- Task 1：implementer subagent + 两段 review（spec ✅ + quality ✅ + I-1/M-1 修复）。
+- Task 2：controller 独立复核（2 行 PromQL，活查询验证即最权威审查）。
+- Task 3：implementer subagent + controller 独立复核（含漂移⑦关键 catch）。
+- Task 4：implementer subagent 撞 **429 限流**终止于 Step 6，**controller 接管**完成 Step 6-8（含 ⭐ group_wait 坑的解法：重启 AM）。
+- Task 5/6：controller 直接做（规避长跑 --real 撞限流风险 + Task6 是收尾验证）。
+
+### 预演成功 ≠ 阶段完成
+
+闭环②（agent 预演）完成。后续（`docs/14` §3.3）：
+- **闭环③**：手册已草稿（本次产出），待定稿。
+- **闭环④ teardown**：按手册 §5 + 各 Task「📝 改动记录」还原到 Phase A 末态 + diff `phase-B-start-state.txt`。
+- **闭环⑤ 用户复现**：用户照定稿手册手动复现（agent 只答疑不代跑），跑通三验收门（AC-US5 用户复现按降级只验 synthetic 闸）= **Phase B 阶段完成**。

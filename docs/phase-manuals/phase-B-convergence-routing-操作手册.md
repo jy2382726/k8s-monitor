@@ -504,3 +504,43 @@ diff /tmp/phase-B-start-baseline.txt /tmp/phase-B-after-teardown.txt
 | 预演日志（脱敏）| `docs/phase-manuals/phase-B-预演日志.md` |
 | 手册草稿（agent 原始记录）| `docs/phase-manuals/phase-B-操作手册-草稿.md` |
 | 凭据型（不进 Git，集群内）| `oncall` ConfigMap（namespace=monitoring）|
+
+---
+
+## 附录：用户复现记录（闭环⑤）
+
+**复现日期**：2026-07-11
+**复现者**：用户（jy2382726）
+**复现环境**：worktree `phase-B-rehearsal` / kind `k8s-monitor-dev` / kps Revision 12
+
+### 通过的验收门
+
+| 验收门 | 命令 | 结果 |
+|---|---|---|
+| AC-US2（收敛）| `assert-convergence.sh 5` | ✅ PASS — 5→1，delta=1，active=5 |
+| AC-NFR-02（风暴收敛率）| `assert-storm.sh 20` | ✅ PASS — 20→1，收敛率=0.050 |
+| AC-US5（抑制 synthetic）| `assert-inhibit.sh` | ✅ PASS — 规则①(critical→warning) + ②(NotReady→同node Pod) 均生效 |
+
+AC-US5 `--real` 全链路留 agent 预演（按 §3.4 降级），用户复现只验 synthetic 闸。
+
+### 与手册的偏差（复现实测发现 + 已修复）
+
+复现中 `assert-convergence.sh` 报 `delta=3`/`delta=2` FAIL，但前置闸过、active=N。经 `superpowers:systematic-debugging` 三轮定位（**不是** HA 去重失效，dedup 正常）：
+
+1. **`notifications_total{integration="webhook"}` 全局聚合、无 alertname 维度** —— 40s 窗口内任何 webhook 通知都计入 delta，背景告警污染。
+2. **背景污染源**：`kube-system/kube-proxy-xtmxl` crashloop（`too many open files`，kind 节点 fd 限制，与 Phase B 无关、12h 前就有）触发 `KubePodCrashLooping`（info→default/webhook）每 `group_interval=5m` 通知一次。
+3. **silence propagate race**：`isolate_background` 建 silence 后未等全副本 propagate，KubePodCrashLooping 抢发了那条 +1（逐秒采样实测：t+5s 一条是它，t+40s 才是被测组的 group_wait 通知）。
+4. **convergence 断言过严**：`delta==1`；而 storm 断言 `delta≤2` —— 同机制同噪声，storm 一直过、convergence 一直不过。
+
+**修复（已 commit，手册/脚本均为修复后版本）**：
+- `assert-convergence.sh` / `assert-storm.sh`：注入前 auto-silence 所有活跃背景告警 + 探针；silence 后 `sleep 6` 等 propagate（消 race）。
+- `assert-convergence.sh` 断言 `delta==1` → `delta≤2 且 active==N`（容忍 ≤1 残余；`delta≈N` 才判 group_by 失效）。
+- 手册新增排障 §4-T11（含 per-replica 诊断法：不等=dedup 正常，相等 N/N/N=去重失效）。
+
+修复后用户复现稳定通过（delta=1）。**这印证手册需经真实复现打磨**——agent 预演期集群恰好无背景告警碰撞，掩盖了此 race；用户复现期 kube-proxy 持续 crashloop 才暴露。
+
+### 结论
+
+**Phase B 阶段完成**：双轨验收达标（① agent 预演跑通三验收门 + 产出手册/日志；② 用户照定稿手册手动复现跑通三验收门）。下一步 Phase C（建 `prometheus-webhook-dingtalk`，接通钉钉真实送达 + @人）。
+
+> 本阶段暴露的先天限制：`notifications_total` 无 alertname 维度，使收敛验收依赖"窗口干净"，需 silence 隔离 + 断言放宽。**真正硬的端到端收敛验收在 Phase C 接通钉钉后**（看钉钉消息内容：一次多症状故障 → 1 条合并消息而非 N 条刷屏）。

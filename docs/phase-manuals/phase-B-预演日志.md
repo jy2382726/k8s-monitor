@@ -184,3 +184,50 @@ commit 改动文件（5 个，plan 原列 3 个，实际 +.gitignore +预演日�
 
 **L0 RED→GREEN 成立**：AM 从 Phase A 单副本升级为 3 副本 quorum HA，硬反亲和(hostname) + topologySpread + CP toleration + PDB minAvailable:2 + 资源 + 5Gi PVC×3 全部到位，HA 边界（停 1 副本 quorum 不破）已验证。验收门 AC-US2/NFR-02/US5 的 HA 基础设施前置就绪（route tree / 收敛逻辑在 Task 4+）。18 项 verify-all 全绿无回归。
 
+## Task 2: core-rules 加 node label（kube_pod_info join）
+
+**目标**：给 `KubePodCrashLooping` + `KubeContainerOOMKilled` 两条 Pod/Container 症状告警的 expr 加 `* on(namespace, pod) group_left(node) kube_pod_info` join，让告警结果带 `node` label，为 06 §3.4 inhibit `equal:[node]` 抑制（AC-US5）铺路。
+
+**背景**：KSM v2.19.1 的 `kube_pod_container_status_waiting_reason` / `kube_pod_container_status_last_terminated_reason` labels = `container,namespace,pod,uid`，**无 node**；`kube_pod_info` 每 pod 1 series 且带 node。`group_left(node)` 多对一安全 join。
+
+### Step 1/2：改动摘要
+
+文件 `deploy/components/prometheusrule-core.yaml`，只改两条 alert 的 `expr`（其他 7 条规则未动），单行 expr 改为 YAML `|` block scalar 多行：
+
+| alert | 改前 | 改后 |
+|---|---|---|
+| `KubePodCrashLooping` | `max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1` | `\n  (max_over_time(...[5m]) >= 1)\n  * on(namespace, pod) group_left(node) kube_pod_info` |
+| `KubeContainerOOMKilled` | `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1` | `\n  (...== 1)\n  * on(namespace, pod) group_left(node) kube_pod_info` |
+
+### Step 3：规则加载评估错误检查
+
+`kubectl apply` 成功（`prometheusrule.core-rules configured`），port-forward 到 Prometheus `/api/v1/rules` 遍历所有 group/rules 的 `lastError`：
+
+```
+评估错误: 无
+```
+
+join 语法 `* on(namespace, pod) group_left(node) kube_pod_info` 无 cardinality / label 冲突。
+
+### Step 4：join 后 series 实测
+
+即时查询 `(max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1) * on(namespace, pod) group_left(node) kube_pod_info`：
+
+```
+join 后 series 数 = 1
+labels = ['container', 'endpoint', 'instance', 'job', 'namespace', 'node', 'pod', 'reason', 'service', 'uid']
+含 node = True
+```
+
+集群当前恰好有 1 个 CrashLoop pod，join 后结果**带 node label**（位置 6/10）。join 真实生效。
+
+### Step 5：commit
+
+- SHA：`b6b984f`
+- 文件：`deploy/components/prometheusrule-core.yaml`，`+8 / -2`（净 +6，含 2 行中文注释 + 2 行 expr block scalar 展开）
+- 纯 surgical 改动，未触碰其他规则、未改 format。
+
+### Task 2 结论
+
+**join 生效**：① Prometheus 加载两条新 expr 无评估错误；② 即时查询实测 series 含 node label（当前集群有 1 个 CrashLoop pod，命中真实数据）。Task 5 注入故障 pod 后 inhibit `equal:[node]` 抑制匹配所需的 node label 前置已就绪。
+

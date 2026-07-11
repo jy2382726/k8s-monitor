@@ -262,7 +262,8 @@
 **触发**：Alertmanager 收到 firing 告警。
 
 **核心流程（行为契约）**：
-1. 按 `cluster + namespace + alertname + severity`（节点类用 `cluster + node + alertname`）`group_by` 收敛。
+1. 按 `namespace + alertname + severity`（节点类用 `node + alertname`）`group_by` 收敛。
+   > ⚠️ **cluster label**：MVP/kind 单集群无 cluster label（未经 relabel 不存在），`group_by` **不含** cluster（与 06 §3.4 权威路由树一致）；生产多集群经 Prometheus `external_labels` 注入 cluster 后再加入 `group_by`。
 2. `group_wait` 短窗口聚合（critical 即时发，warning 可聚合）。
 3. `repeat_interval` 控制重复通知（critical 1h，warning 4h）。
 4. `inhibit_rules`：
@@ -451,6 +452,12 @@
 **Then** 主告警群收到 `severity=warning` 的 KubeWorkerNodeNotReady ActionCard（含节点名 / 持续 / kubectl 命令 / Runbook 链接）@值班人，且 MTTD ≤ 6min。
 
 > ⚠️ **注入方式勘误（Phase A 预演实测）**：原措辞 `cordon + drain` **不触发 NotReady**——`cordon` 只设 `unschedulable`、`drain` 只驱逐 Pod，都不改 `Ready` 状态，照原措辞 `KubeWorkerNodeNotReady` 永不 firing。改为 `docker exec <node> pkill -STOP kubelet`（暂停 kubelet 心跳 → apiserver `node-lifecycle-controller` 在 `--node-monitor-grace-period` 默认 40s 后标 `Ready=Unknown`）。cleanup 用 `pkill -CONT kubelet`。详见 `docs/phase-manuals/phase-A-alert-rules-操作手册.md` §4-T5。
+
+> 🔧 **测试机制（AC-US2 / AC-US5 / AC-NFR-02 共用，Phase B 实测落地）**：
+> - **合成告警绕过 `for` 计时**：直接 `POST /api/v2/alerts` 注入 N 个合成告警（同 alertname/namespace/severity、pod 各异），绕过 Prometheus 规则 `for` 计时，把 AM 收敛/路由/抑制**配置层**隔离出来确定性验证（40s 而非 10m×N）。真端到端 firing 留 Phase F 全量演练。
+> - **收敛证明**：`sum(alertmanager_notifications_total{integration="webhook"})` 注入前后 delta≈1（N→1 组）。
+> - ⚠️ **先天限制**：`notifications_total` 无 alertname/receiver 维度（全局聚合），背景活跃告警会污染 delta → 测试需 auto-silence 背景 + sleep 等 propagate + 断言放宽 `delta≤2`（见 `phase-B-convergence-routing-操作手册.md` §4-T11）。
+> - **AC-US5 双层**：synthetic 闸（合成 source/target，秒级确定，**用户复现级**）+ `--real` 全链路（真 CrashLoop pod + `pkill -STOP kubelet`，~17m 非确定，**agent 预演级**）。用户复现按降级只验 synthetic 闸。
 
 ### AC-US2-01：收敛 + @人
 

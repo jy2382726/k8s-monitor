@@ -1,15 +1,67 @@
-{{/* Phase C 自包含模板（Task 1 骨架版，Task 2 填全 kubectl/Runbook/@人） */}}
-{{ define "dingtalk-default.title" }}[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ end }}
-{{ define "dingtalk-default.content" }}#### [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
-{{ range .Alerts.Firing }}- {{ .Annotations.summary }}
+{{/* ===== Phase C 自包含富 Markdown 模板（PRD §6.3 F-SelfContained + 06 §3.6.2）===== */}}
+{{/* webhook-dingtalk v2.1.0 Build() 硬编码 markdown（实测 notifier/notification.go），故 P0/P1 用富 Markdown 非 ActionCard */}}
+
+{{/* ---- severity → P 级别映射（PRD §6.4）---- */}}
+{{ define "severity_to_p" }}{{ if eq . "critical" }}P0{{ else if eq . "warning" }}P1{{ else if eq . "info" }}P2{{ else }}P3{{ end }}{{ end }}
+
+{{/* ---- 通用单告警渲染（自包含字段）---- */}}
+{{/* 注：include 是 Helm 专有函数（非 sprig/stdlib），webhook-dingtalk 不支持 → severity→P 内联 */}}
+{{ define "alert_self_contained" }}
+#### [{{ if eq .Labels.severity "critical" }}P0{{ else if eq .Labels.severity "warning" }}P1{{ else if eq .Labels.severity "info" }}P2{{ else }}P3{{ end }}] {{ .Labels.alertname }}
+
+{{- if .Labels.node }}**节点**: {{ .Labels.node }}
+{{ end }}
+{{- if .Labels.namespace }}**命名空间**: {{ .Labels.namespace }}
+{{ end }}
+{{- if .Labels.pod }}**Pod**: {{ .Labels.pod }}
+{{ end }}
+{{- if .Labels.container }}**容器**: {{ .Labels.container }}
+{{ end }}
+{{- if .Annotations.summary }}**触发值**: {{ .Annotations.summary }}
+{{ end }}
+{{- if .Annotations.description }}
+{{ .Annotations.description }}
+{{ end }}
+📖 **Runbook**: https://runbook.example.com/runbook/{{ .Labels.alertname | lower }}   {{/* M14a stub：URL 字段在位，内容 Phase F 补（M14b） */}}
+🔍 **Grafana**: https://grafana.internal.example.com/d/k8s-monitor   {{/* 内网，次要，需 VPN */}}
+
+**操作建议（不依赖 UI）:**
+{{ if or (eq .Labels.alertname "KubeWorkerNodeNotReady") (eq .Labels.alertname "KubeMasterNodeNotReady") (eq .Labels.alertname "MultipleWorkerNodesNotReady") }}
+1. `kubectl describe node {{ .Labels.node }}`
+2. `kubectl get pods -A --field-selector spec.nodeName={{ .Labels.node }}`
+3. 排障见 Runbook §节点 NotReady
+{{ else if eq .Labels.alertname "KubePodCrashLooping" }}
+1. `kubectl describe pod {{ .Labels.pod }} -n {{ .Labels.namespace }}`
+2. `kubectl logs {{ .Labels.pod }} -n {{ .Labels.namespace }} --previous`
+3. `kubectl get events -n {{ .Labels.namespace }} --sort-by=.lastTimestamp | tail -20`
+{{ else if eq .Labels.alertname "KubeContainerOOMKilled" }}
+1. `kubectl describe pod {{ .Labels.pod }} -n {{ .Labels.namespace }}`
+2. `kubectl get events -n {{ .Labels.namespace }} --field-selector reason=OOMKilling`
+3. 检查容器 memory limit（Runbook §OOM）
+{{ else }}
+1. `kubectl get events -A --sort-by=.lastTimestamp | tail -30`
+2. 见 Runbook 排障步骤
+{{ end }}
+{{ end }}
+
+{{/* ---- target: dingtalk-actioncard（critical P0，自包含 + @人）---- */}}
+{{ define "dingtalk-actioncard.title" }}[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] [P0] {{ .CommonLabels.alertname }}{{ end }}
+{{ define "dingtalk-actioncard.content" }}{{ range .Alerts.Firing }}{{ template "alert_self_contained" . }}
+{{ end }}
+👤 **责任人**: {{ range .AtMobiles }}@{{ . }} {{ end }}{{ end }}
+
+{{/* ---- target: dingtalk-markdown（warning P1，自包含，不 @ 人）---- */}}
+{{ define "dingtalk-markdown.title" }}[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] [P1] {{ .CommonLabels.alertname }}{{ end }}
+{{ define "dingtalk-markdown.content" }}{{ range .Alerts.Firing }}{{ template "alert_self_contained" . }}
 {{ end }}{{ end }}
 
-{{ define "dingtalk-markdown.title" }}{{ template "dingtalk-default.title" . }}{{ end }}
-{{ define "dingtalk-markdown.content" }}{{ template "dingtalk-default.content" . }}{{ end }}
+{{/* ---- target: dingtalk-default（info/none P2/P3 兜底，轻量 markdown）---- */}}
+{{ define "dingtalk-default.title" }}[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ end }}
+{{ define "dingtalk-default.content" }}{{ range .Alerts.Firing }}- [{{ template "severity_to_p" .Labels.severity }}] {{ .Labels.alertname }}: {{ .Annotations.summary }}（📖 {{ .Labels.alertname | lower }}）
+{{ end }}{{ end }}
 
-{{ define "dingtalk-actioncard.title" }}{{ template "dingtalk-default.title" . }}{{ end }}
-{{ define "dingtalk-actioncard.content" }}{{ template "dingtalk-default.content" . }}{{ end }}
-
-{{ define "watchdog.title" }}[Watchdog] 监控系统心跳 {{ .Status | toUpper }}{{ end }}
-{{ define "watchdog.content" }}#### 🐶 Watchdog 心跳
-监控系统在线（{{ .CommonLabels.alertname }}）。此消息每小时更新；**停止更新 = 监控系统挂了**。{{ end }}
+{{/* ---- target: watchdog-health（Watchdog 心跳，独立监控健康群）---- */}}
+{{ define "watchdog.title" }}🐶 [Watchdog] 监控系统心跳 {{ .Status | toUpper }}{{ end }}
+{{ define "watchdog.content" }}#### 🐶 Watchdog 心跳（每小时）
+监控系统在线。**此消息停止更新 = 监控系统挂了**（绕过 Alertmanager 单点的「心跳缺席」被动发现，06 §3.10.2）。
+集群: k8s-monitor-dev | 告警: {{ .GroupLabels.alertname }}{{ end }}

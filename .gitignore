@@ -45,6 +45,12 @@ deploy/verify/*
 !deploy/verify/assert-storm.sh
 !deploy/verify/am-route-check.sh
 !deploy/verify/assert-inhibit.sh
+# Phase C 钉钉触达（webhook-dingtalk 部署 + 凭据组装 + 触达/MTTD 断言）
+!deploy/verify/dingtalk-check.sh
+!deploy/verify/assemble-webhook-config.sh
+!deploy/verify/assert-dingtalk-delivery.sh
+!deploy/verify/assert-watchdog-delivery.sh
+!deploy/verify/measure-mttd.sh
 !**/.gitkeep
 
 # ---- 日志 / 临时 / 备份 ---------------------------------------

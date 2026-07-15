@@ -1,0 +1,37 @@
+## prometheus-webhook-dingtalk config（由 assemble-webhook-config.sh 从凭据 Secret + oncall ConfigMap 渲染）
+## 占位符（assemble 脚本 envsubst 填充，本文件入 Git 不含真实值）：
+##   ${MAIN_ACCESS_TOKEN}/${MAIN_SECRET}        ← dingtalk-credentials-main（主告警群）
+##   ${WATCHDOG_ACCESS_TOKEN}/${WATCHDOG_SECRET} ← dingtalk-credentials-watchdog（监控健康群）
+##   ${PRIMARY_PHONE}/${BACKUP_PHONE}            ← oncall ConfigMap（primary.phone/backup.phone）
+templates:
+  - /templates/template.tmpl
+
+targets:
+  # 主告警群 3 target（共用 dingtalk-credentials-main 机器人）
+  dingtalk-default:                            # AM receiver `default`（info/none P2/P3 兜底）
+    url: https://oapi.dingtalk.com/robot/send?access_token=${MAIN_ACCESS_TOKEN}
+    secret: ${MAIN_SECRET}
+    message:
+      title: '{{ template "dingtalk-default.title" . }}'
+      text: '{{ template "dingtalk-default.content" . }}'
+  dingtalk-markdown:                            # AM receiver `dingtalk-markdown`（warning P1）
+    url: https://oapi.dingtalk.com/robot/send?access_token=${MAIN_ACCESS_TOKEN}
+    secret: ${MAIN_SECRET}
+    message:
+      title: '{{ template "dingtalk-markdown.title" . }}'
+      text: '{{ template "dingtalk-markdown.content" . }}'
+  dingtalk-actioncard:                          # AM receiver `dingtalk-actioncard-sms`（critical P0）
+    url: https://oapi.dingtalk.com/robot/send?access_token=${MAIN_ACCESS_TOKEN}
+    secret: ${MAIN_SECRET}
+    mention:                                    # P0 @值班+备份（PRD §6.4/§3.12.5）
+      mobiles: ['${PRIMARY_PHONE}', '${BACKUP_PHONE}']
+    message:
+      title: '{{ template "dingtalk-actioncard.title" . }}'
+      text: '{{ template "dingtalk-actioncard.content" . }}'
+  # 监控健康群 1 target（dingtalk-credentials-watchdog 机器人）
+  watchdog-health:                              # AM receiver `watchdog-only`（Watchdog 心跳）
+    url: https://oapi.dingtalk.com/robot/send?access_token=${WATCHDOG_ACCESS_TOKEN}
+    secret: ${WATCHDOG_SECRET}
+    message:
+      title: '{{ template "watchdog.title" . }}'
+      text: '{{ template "watchdog.content" . }}'

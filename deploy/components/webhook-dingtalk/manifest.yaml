@@ -1,0 +1,46 @@
+# Phase C prometheus-webhook-dingtalk（helm chart 已下架，raw manifest 部署）
+# connector path 契约：AM receiver URL /dingtalk/<target>/send → target 名见 config.yaml.template
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-webhook-dingtalk
+  namespace: monitoring
+  labels: {app.kubernetes.io/name: prometheus-webhook-dingtalk}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: prometheus-webhook-dingtalk}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: prometheus-webhook-dingtalk}
+    spec:
+      containers:
+        - name: webhook-dingtalk
+          image: timonwong/prometheus-webhook-dingtalk:v2.1.0   # tag 以 Step 1 实测为准
+          imagePullPolicy: IfNotPresent
+          args:
+            - --web.listen-address=:8060
+            - --config.file=/config/config.yaml
+            - --web.enable-lifecycle        # 支持 POST /-/reload（Task 2 改模板后热加载）
+          ports: [{name: http, containerPort: 8060}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits:   {cpu: 200m, memory: 128Mi}
+          volumeMounts:
+            - {name: config, mountPath: /config, readOnly: true}      # Secret webhook-dingtalk-config
+            - {name: templates, mountPath: /templates, readOnly: true} # ConfigMap webhook-dingtalk-templates
+          livenessProbe:  {httpGet: {path: /-/healthy, port: http}, initialDelaySeconds: 10, periodSeconds: 30}
+          readinessProbe: {httpGet: {path: /-/healthy, port: http}, initialDelaySeconds: 5, periodSeconds: 10}
+      volumes:
+        - name: config
+          secret: {secretName: webhook-dingtalk-config}
+        - name: templates
+          configMap: {name: webhook-dingtalk-templates}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-webhook-dingtalk     # AM receiver URL 用此名 + :8060
+  namespace: monitoring
+spec:
+  selector: {app.kubernetes.io/name: prometheus-webhook-dingtalk}
+  ports: [{name: http, port: 8060, targetPort: http}]   # ⚠️ port=8060 对齐 AM URL :8060（非 contrib 默认 80）

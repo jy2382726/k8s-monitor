@@ -1,0 +1,15 @@
+{{/* Phase C 自包含模板（Task 1 骨架版，Task 2 填全 kubectl/Runbook/@人） */}}
+{{ define "dingtalk-default.title" }}[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ end }}
+{{ define "dingtalk-default.content" }}#### [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+{{ range .Alerts.Firing }}- {{ .Annotations.summary }}
+{{ end }}{{ end }}
+
+{{ define "dingtalk-markdown.title" }}{{ template "dingtalk-default.title" . }}{{ end }}
+{{ define "dingtalk-markdown.content" }}{{ template "dingtalk-default.content" . }}{{ end }}
+
+{{ define "dingtalk-actioncard.title" }}{{ template "dingtalk-default.title" . }}{{ end }}
+{{ define "dingtalk-actioncard.content" }}{{ template "dingtalk-default.content" . }}{{ end }}
+
+{{ define "watchdog.title" }}[Watchdog] 监控系统心跳 {{ .Status | toUpper }}{{ end }}
+{{ define "watchdog.content" }}#### 🐶 Watchdog 心跳
+监控系统在线（{{ .CommonLabels.alertname }}）。此消息每小时更新；**停止更新 = 监控系统挂了**。{{ end }}

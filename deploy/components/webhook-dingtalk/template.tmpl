@@ -47,17 +47,20 @@
 {{/* ---- target: dingtalk-actioncard（critical P0，自包含 + @人）---- */}}
 {{ define "dingtalk-actioncard.title" }}[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] [P0] {{ .CommonLabels.alertname }}{{ end }}
 {{ define "dingtalk-actioncard.content" }}{{ range .Alerts.Firing }}{{ template "alert_self_contained" . }}
+{{ end }}{{ range .Alerts.Resolved }}✅ **[已恢复 P0]** {{ .Labels.alertname }}（{{ .Annotations.summary }}）
 {{ end }}
 👤 **责任人**: {{ range .AtMobiles }}@{{ . }} {{ end }}{{ end }}
 
 {{/* ---- target: dingtalk-markdown（warning P1，自包含，不 @ 人）---- */}}
 {{ define "dingtalk-markdown.title" }}[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] [P1] {{ .CommonLabels.alertname }}{{ end }}
 {{ define "dingtalk-markdown.content" }}{{ range .Alerts.Firing }}{{ template "alert_self_contained" . }}
+{{ end }}{{ range .Alerts.Resolved }}✅ **[已恢复]** {{ .Labels.alertname }}（{{ .Annotations.summary }}）
 {{ end }}{{ end }}
 
 {{/* ---- target: dingtalk-default（info/none P2/P3 兜底，轻量 markdown）---- */}}
 {{ define "dingtalk-default.title" }}[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ end }}
 {{ define "dingtalk-default.content" }}{{ range .Alerts.Firing }}- [{{ template "severity_to_p" .Labels.severity }}] {{ .Labels.alertname }}: {{ .Annotations.summary }}（📖 {{ .Labels.alertname | lower }}）
+{{ end }}{{ range .Alerts.Resolved }}- ✅ [已恢复] {{ .Labels.alertname }}（📖 {{ .Labels.alertname | lower }}）
 {{ end }}{{ end }}
 
 {{/* ---- target: watchdog-health（Watchdog 心跳，独立监控健康群）---- */}}

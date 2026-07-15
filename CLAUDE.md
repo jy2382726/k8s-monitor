@@ -40,13 +40,15 @@
 > 改组件前**必先** `helm template <chart> <ver> --version <x> | grep image:` 核对实际镜像 tag，否则 ImagePullBackOff。
 > 版本映射权威见 `deploy/preload-images.sh` 顶部镜像清单注释。
 
-> ⚠️ **监控规则/查询编写必知（Phase A 实测，写 PrometheusRule / PromQL / AM 查询前必看）**：
+> ⚠️ **监控规则/查询编写必知（Phase A+B 实测，写 PrometheusRule / PromQL / AM 查询/脚本前必看）**：
 > - **KSM v2.19.1 `metric-labels-allowlist` 只把 label 暴露到 `kube_<resource>_labels` 系列**（如 `kube_node_labels{label_role=...}`），**不传播**到其他 metric（`kube_node_status_condition` 上没有 role label）。按 node role 过滤的规则须用 `(kube_node_status_condition{...}==1) * on(node) group_left(label_role) kube_node_labels{label_role="..."}` join，不能直接写 `kube_node_status_condition{role="..."}`。
 > - **kps scrape job label 实测真名**：`apiserver` / `kube-etcd` / `kubelet` / `node-exporter` / `kube-state-metrics` 等（**不是裸 `etcd`**）。写 `up{job="..."}` 类规则前先 `count by(job)(up)` 核对真实 job 名，否则匹配 0 series 成死规则。
 > - **Alertmanager `/api/v2/alerts` 返回顶层是 `list`**（非 `{"alerts":[...]}` dict）。解析脚本用 `isinstance(d,list)` 守卫，别 `d.get('alerts',[])`。
 > - **KSM `kube_pod_container_status_*` 系列 metric 无 `node` label**（labels 只有 container/namespace/pod/uid）。规则要用 node 维度（如 inhibit `equal:[node]` 抑制同节点 Pod 症状）须 join：`(...) * on(namespace,pod) group_left(node) kube_pod_info`（kube_pod_info 含 node，每 pod 1 series，多对一安全）。不 join 则 inhibit 匹配 0。
 > - **AM `alertmanager_notifications_total{integration="webhook"}` 无 `alertname`/`receiver` label**（全局聚合计数器，不区分通知来自哪个告警/receiver）。用它 delta 验"某类告警收敛成 1 条"会被背景活跃告警污染 → 须 auto-silence 背景 + sleep 等 propagate + 断言放宽（详见 memory `project_am_notification_test_pitfalls`）。硬验收看触达内容（Phase C 钉钉消息）。
 > - **Prometheus 与 Alertmanager 的告警状态名不同**：Prometheus `/api/v1/alerts` 用 `state="firing"`；**Alertmanager `/api/v2/alerts` 用 `status.state`，取值 `active`/`unprocessed`/`suppressed`（没有 "firing"）**。写脚本轮询/断言 AM 告警状态必须用 `active`（=已过 group_wait、firing 中、可作 inhibit source），写 `firing` 永远匹配不上 → 假 FAIL（Phase B AC-US5 --real 踩过，靠 `ALERTS` 指标 5 个 firing 采样点才证清白）。
+> - **AM `POST /api/v2/alerts` 请求体是 `[告警对象数组]`，不是 `[[...]]` 双层数组**：双括号被 AM 拒 HTTP 400（`cannot unmarshal array into struct`），告警根本没建 → 后续 `GET` 查不到 → 脚本误判 route/inhibit 失效（假 FAIL）。写合成告警注入脚本（绕过 Prom `for` 计时测 AM 收敛/抑制）用单括号 `[{"labels":{...}}]`（Phase B AC-US2/US5 断言脚本踩过，plan verbatim 给的 `[[...]]` 是错的）。
+> - **AM StatefulSet 名带 `alertmanager-` 前缀，service 名不带**：STS 真名 = `alertmanager-kube-prometheus-stack-alertmanager`，service = `kube-prometheus-stack-alertmanager`。`kubectl ... statefulset/<名>` 漏前缀 → NotFound；port-forward/proxy 用 service 名。写 STS 操作（wait/rollout restart/delete pod）前先 `kubectl get statefulset -n monitoring` 核真名（Phase B HA 升级踩过）。
 
 ## 4. 明确不做（Non-Goals，🔒 禁止重开）
 

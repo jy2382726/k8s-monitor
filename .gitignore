@@ -70,6 +70,8 @@ desktop.ini
 # ---- Claude Code 状态 ----------------------------------------
 # 通用方法论 skill 工具箱：与本项目业务无关，仅本地使用，不跟踪
 .claude/skills/
+# Claude Code worktree 本地隔离环境，不跟踪
+.claude/worktrees/
 # 本机个人状态
 .claude/settings.local.json
 .claude/projects/

@@ -132,6 +132,48 @@ inject_control_plane() {
 }
 cleanup_control_plane(){ info "control-plane 本期无副作用需清理（注入已被安全拒绝）"; }
 
+# ---------- stop-replica（Phase D AC-US4：停副本→自监控规则 firing）----------
+# ⚠️ 实测核验（Phase D 预演）：AM/Prom 受 prometheus-operator 管理，直接 `kubectl scale statefulset`
+#    会被 operator 秒级 reconcile 回 CR 声明的副本数（无效）；必须 patch 对应 CR 的 .spec.replicas，
+#    operator 才会真正驱动 STS 缩容。webhook-dingtalk 是裸 Deployment，kubectl scale 直接生效。
+inject_stop_replica() {
+  local target="${1:-}"
+  record_t0 "stop-replica-$target"
+  case "$target" in
+    alertmanager)
+      kubectl -n monitoring patch alertmanager kube-prometheus-stack-alertmanager \
+        --type=merge -p '{"spec":{"replicas":2}}' >/dev/null 2>&1 \
+        && ok "Alertmanager CR patched 3→2（cluster_members 将降 <3 → AlertmanagerDown fire）" \
+        || { err "Alertmanager CR patch 失败（检查 CR 名 / API 可达性）"; exit 2; }
+      warn "CR 缩容 PVC 保留，cleanup 回 3 副本即可，无需删 PVC"
+      warn "测完务必跑：$0 cleanup stop-replica alertmanager"
+      ;;
+    prometheus)
+      err "停 Prometheus 副本会导致规则评估停止（PrometheusDown 死锁），AC-US4 不验此项（决策声明 4）。"
+      err "如需强制：kubectl -n monitoring patch prometheus kube-prometheus-stack-prometheus --type=merge -p '{\"spec\":{\"replicas\":0}}'（无告警可发，靠 Watchdog）。"
+      exit 3
+      ;;
+    webhook)
+      kubectl -n monitoring scale deployment prometheus-webhook-dingtalk --replicas=0 >/dev/null 2>&1 \
+        && ok "webhook-dingtalk Deployment scaled 1→0（DingtalkWebhookDown fire）" \
+        || { err "webhook scale 失败（检查 deploy 名 / API 可达性）"; exit 2; }
+      warn "通知通道中断：告警本身发不出钉钉，AC-US4 验 Prom API firing 不验送达。"
+      warn "测完务必跑：$0 cleanup stop-replica webhook"
+      ;;
+    *)
+      err "用法：$0 stop-replica alertmanager|prometheus|webhook"; exit 2 ;;
+  esac
+}
+cleanup_stop_replica() {
+  local target="${1:-}"
+  case "$target" in
+    alertmanager) kubectl -n monitoring patch alertmanager kube-prometheus-stack-alertmanager --type=merge -p '{"spec":{"replicas":3}}' >/dev/null 2>&1 && ok "Alertmanager 回 3 副本（PVC 全程保留）" || warn "Alertmanager patch 回 3 失败，请手动核查" ;;
+    prometheus)   kubectl -n monitoring patch prometheus kube-prometheus-stack-prometheus --type=merge -p '{"spec":{"replicas":1}}' >/dev/null 2>&1 && ok "Prometheus 回 1 副本" || warn "Prometheus patch 回 1 失败，请手动核查" ;;
+    webhook)      kubectl -n monitoring scale deployment prometheus-webhook-dingtalk --replicas=1 >/dev/null 2>&1 && ok "webhook 回 1 副本" || warn "webhook scale 回 1 失败，请手动核查" ;;
+    *) err "用法：$0 cleanup stop-replica alertmanager|prometheus|webhook"; exit 2 ;;
+  esac
+}
+
 # ---------- cleanup 分发 ----------
 do_cleanup() {
   local type="${1:-}" node="${2:-}"
@@ -141,13 +183,14 @@ do_cleanup() {
     oom)            cleanup_oom ;;
     pod-pending)    cleanup_pod_pending ;;
     control-plane)  cleanup_control_plane ;;
+    stop-replica)   cleanup_stop_replica "$node" ;;
     --all)
       # not-ready 是节点级，必须指定 node；无 node 则跳过（其余 Pod 类故障仍清理）
       if [ -n "$node" ]; then cleanup_not_ready "$node"; else warn "cleanup --all 未指定 node，跳过 not-ready（Pod 类故障仍清理）"; fi
       cleanup_crashloop; cleanup_oom; cleanup_pod_pending; cleanup_control_plane
       ok "cleanup --all 完成"
       ;;
-    *) err "未知类型：$type（支持：not-ready/crashloop/oom/pod-pending/control-plane/--all）"; exit 2 ;;
+    *) err "未知类型：$type（支持：not-ready/crashloop/oom/pod-pending/control-plane/stop-replica/--all）"; exit 2 ;;
   esac
 }
 
@@ -160,7 +203,8 @@ usage(){
   oom                       注入 OOMKilled Pod
   pod-pending               注入永久 Pending Pod
   control-plane             kind 上安全拒绝（单 master 不可安全注入）
-  cleanup <type|--all> [worker-node]   清理（--all 全清）
+  stop-replica <target>     停监控副本（alertmanager|webhook 真停；prometheus 安全拒绝）
+  cleanup <type|--all> [worker-node]   清理（--all 全清；stop-replica 需带 target）
 EOF
 }
 
@@ -170,6 +214,7 @@ case "${1:-}" in
   oom)           inject_oom ;;
   pod-pending)   inject_pod_pending ;;
   control-plane) inject_control_plane ;;
+  stop-replica)  inject_stop_replica "${2:-}" ;;
   cleanup)       do_cleanup "${2:-}" "${3:-}" ;;
   *)             usage; exit 2 ;;
 esac

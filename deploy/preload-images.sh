@@ -50,6 +50,10 @@ IMAGES=(
 
   # CoreDNS（kind 节点内已含，但 helm chart 可能拉取）
   "registry.k8s.io/coredns/coredns:v1.11.3"
+
+  # prometheus-webhook-dingtalk（Phase C 钉钉触达；helm chart 已下架，raw manifest 部署）
+  # ★ 必须带 docker.io/ 前缀：preload 用 ${img#*/} 去前缀，裸 timonwong/... 会被剥成 prometheus-webhook-dingtalk:v2.1.0（丢 namespace）
+  "docker.io/timonwong/prometheus-webhook-dingtalk:v2.1.0"
 )
 
 # 带重试的拉取：代理 (127.0.0.1:7890) 间歇性中断会导致

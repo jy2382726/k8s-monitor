@@ -431,11 +431,19 @@ kubectl -n monitoring delete configmap webhook-dingtalk-templates
 #       configmap "webhook-dingtalk-templates" deleted
 ```
 
-### 5.2 修改型：回 Phase B 态（Git 文件 checkout）
+### 5.2 修改型：无（Git 文件保留 + AM config 零修改）
+
+Phase C 的 Git 文件改动（`preload-images.sh` 加 dingtalk 镜像行 / `verify-all.sh` 加 dingtalk check）是 Phase C 产物，**保留不回退**——遵循 `docs/14` §3.3 两坑#1（修改型只还原集群，不 `git checkout` worktree 文件；这些文件是后续复现/下一 Phase 的依赖）。
+
+> ⚠️ **不要** `git checkout deploy/preload-images.sh deploy/verify/verify-all.sh`：① 违反两坑#1（worktree 文件是本 Phase 产物应保留）；② 方向错（`git checkout <file>` 默认回 HEAD = worktree 分支的 Phase C 版，根本没还原到 Phase B）。
+
+**AM config 零修改型**：Phase C 未动 AM config（Phase B 的 4 receiver URL 仍在，但指向的 webhook-dingtalk 已删 → 连接拒绝，属预期，等同 Phase B 末态的「送达全失败」）。无需还原 AM route。
+
+**集群回 Phase B 的验证**：worktree 的 `verify-all.sh` 是 Phase C 版（含 dingtalk check），删 webhook 后 dingtalk check 必 FAIL（预期，不代表 teardown 失败）。确认「集群精确回 Phase B 末态」用 **Phase B 版** verify-all（`origin/main` 的，无 dingtalk check）：
 ```bash
-git checkout deploy/preload-images.sh deploy/verify/verify-all.sh   # 回前序态（去 dingtalk 镜像行 / dingtalk check）
+git show origin/main:deploy/verify/verify-all.sh | bash
+# 预期: Summary: 19 passed, 0 failed
 ```
-> **AM config 零修改型**：Phase C 未动 AM config（Phase B 的 4 receiver URL 仍在，但指向的 webhook-dingtalk 已删 → 连接拒绝，属预期，等同 Phase B 末态的「送达全失败」）。无需还原 AM route。
 
 ### 5.3 凭据型：保留不删（跨 Phase 共享）
 ```bash

@@ -493,24 +493,26 @@ diff docs/phase-manuals/phase-C-start-state.txt /tmp/phase-C-after-teardown.txt
 
 > 用户照本手册手动复现后填写本节。复现通过 = Phase C 阶段完成。
 
-**复现日期**：_待填（闭环⑤）_
-**复现者**：_待填_
-**复现环境**：worktree / kind `k8s-monitor-dev` / _
+**复现日期**：2026-08-06
+**复现者**：用户手动复现（agent 仅答疑 + 跑诊断脚本，未代操作部署/验收）
+**复现环境**：worktree `phase-C-dingtalk`（分支 `worktree-phase-C-dingtalk`）/ kind `k8s-monitor-dev` / 节点 `k8s-monitor-dev-{control-plane,worker,worker2}`
 
 ### 通过的验收门
 
 | 验收门 | 命令 | 结果 |
 |---|---|---|
-| 主告警群 P0 链路 + 看群 | `assert-dingtalk-delivery.sh critical` | _待填（resp_status=200 + 群里 P0 卡片字段齐全）_ |
-| 主告警群 P1 链路 + 看群 | `assert-dingtalk-delivery.sh warning` | _待填_ |
-| 监控健康群 Watchdog + 看群 | `assert-watchdog-delivery.sh` | _待填（群里 🐶 心跳）_ |
-| MTTD 单次 | `measure-mttd.sh KubeWorkerNodeNotReady` | _待填（MTTD=N，cleanup worker Ready=True）_ |
-| verify-all 全绿 | `verify-all.sh` | _待填（20 passed, 0 failed）_ |
+| 主告警群 P0 链路 + 看群 | `assert-dingtalk-delivery.sh critical` | ✅ resp_status=200 + 群里 [P0] 卡片（kubectl + Runbook + @责任人手机号） |
+| 主告警群 P1 链路 + 看群 | `assert-dingtalk-delivery.sh warning` | ✅ resp_status=200 + 群里 [P1] 卡片（⚠ 首次假 FAIL，重跑 PASS，见偏差②） |
+| 监控健康群 Watchdog + 看群 | `assert-watchdog-delivery.sh` | ✅ resp_status=200 + 路由 watchdog-only（不发主群）+ 监控健康群 🐶 心跳卡片 |
+| MTTD 单次 | `measure-mttd.sh KubeWorkerNodeNotReady` | ✅ MTTD=432s≈7m12s（链路开销 ~32s ≤60s 达标；余为 K8s 检测延迟 ~100s + for:5m 防抖）；cleanup 后 worker Ready=True |
+| verify-all 全绿 | `verify-all.sh` | ✅ 20 passed, 0 failed（含 `[PASS] prometheus-webhook-dingtalk`） |
 
 ### 与手册的偏差（复现实测发现）
 
-_待填（复现中若发现手册命令/预期偏差，记录于此反馈定稿）_
+1. **§1.1 verify-all 预期口径偏差**：手册写「预期 19 passed, 0 failed（dingtalk check 尚未加）」，但 worktree 跑的是 Phase C 版 verify-all（20 项含 dingtalk check），webhook 未部署时实际 = 19 PASS + 1 FAIL(dingtalk)。手册 §1.1 预期按 Phase B 版算，与 worktree Phase C 版口径不一致（与 §5.2 同源混淆）。**建议** §1.1 预期改为「19 核心 PASS + dingtalk 1 FAIL（预期 RED，webhook 未部署）」。
+2. **assert-dingtalk-delivery.sh warning 首次假 FAIL**（T6 时序范畴）：首次注入后 55s GWAIT 内 AM dispatcher 未派发（webhook 0 markdown POST），重跑即 PASS（markdown resp_status=200 + delta=1）。critical 未复现此现象。**建议** assert warning 偶发 FAIL 时先重跑一次再判定。
+3. **§5.2 teardown 修改型 Git 文件处理 bug**：原写 `git checkout preload/verify-all` 回前序态（违反 docs/14 §3.3 两坑#1 + 方向错），已在闭环④ commit `1ced508` 修正（Git 文件保留 + 验证用 `git show origin/main:verify-all.sh`）。
 
 ### 结论
 
-_待填（Phase C 阶段完成判定）_
+**Phase C 阶段完成 ✅** —— 5 个验收门全部通过（P0/P1/Watchdog 脚本+看群 + MTTD 432s + verify-all 20/0）。钉钉真实触达链路（主告警群 P0/P1 + 监控健康群 Watchdog）验收通过，MTTD 链路开销 ~32s ≤ 60s 达标（PRD §11.1 北极星）。闭环⑤用户复现通过 = Phase C 阶段完成（双轨验收闭环）。

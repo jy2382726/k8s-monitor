@@ -64,6 +64,8 @@ check "Alertmanager: route 树 + severity 分流 + watchdog 独立 + inhibit（P
   "deploy/verify/am-route-check.sh"
 check "prometheus-webhook-dingtalk: Pod Ready + Service:8060 + healthy（Phase C）" \
   "deploy/verify/dingtalk-check.sh"
+check "Meta-monitoring: 8 自监控规则加载 + Watchdog firing（Phase D）" \
+  "deploy/verify/self-mon-check.sh"
 check "kubectl top nodes works" \
   "kubectl top nodes >/dev/null 2>&1"
 check "echo-server reachable via Ingress" \

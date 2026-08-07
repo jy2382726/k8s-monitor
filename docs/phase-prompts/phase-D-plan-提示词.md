@@ -2,13 +2,15 @@
 元信息（非提示词正文，复制时从此行下方开始）
 - 用途：Phase D（Meta-monitoring）提示词集。下含：
     · 提示词②（闭环① writing-plans）—— 已执行，plan v3 定稿；保留作记录
-    · 提示词③（闭环② agent 预演执行，subagent-driven-development）—— 当前阶段
+    · 提示词③（闭环② agent 预演执行，subagent-driven-development）—— 已执行，预演完成（8 task GREEN + 草稿 + 日志）
+    · 提示词④（闭环③ 提炼可复现操作手册，草稿→定稿）—— 当前阶段
 - 来源：基于 docs/14 §6 提示词②/③ 通用模板，填 Phase D 范围 + 注入实测教训。
 - 不改原文档：docs/14 §6 通用模板不动，本文件是 Phase D 专用副本。
 - ⚠️ 提示词② 段含 v1 初版假设（部分被 plan v2/v3 实测推翻，如 NotificationFailure 量纲 /
   MonitoringDiskFull metric / 凭据前置"监控健康群 D 建"实为 C 已建）—— 以 plan v3 为权威。
 - 产物路径：plan → docs/superpowers/plans/2026-08-06-phase-D-meta-monitoring.md；
              手册草稿 → docs/phase-manuals/phase-D-操作手册-草稿.md；
+             手册定稿 → docs/phase-manuals/phase-D-meta-monitoring-操作手册.md；
              预演日志 → docs/phase-manuals/phase-D-预演日志.md
 -->
 
@@ -119,3 +121,69 @@ plan 存 **docs/superpowers/plans/2026-08-06-phase-D-meta-monitoring.md**。
 
 【预演成功 ≠ 阶段完成】
 预演跑通（闭环②）只是"手册可信的前提"。阶段完成还需：定稿手册（提示词④）→ teardown 还原（提示词⑤ 步骤一，Task8 Step6 已给命令）→ 用户复现（提示词⑤ 步骤二）。见 docs/14 §3.3。
+
+---
+
+# 提示词④ —— 提炼可复现操作手册（Phase D 闭环③，预演成功后定稿）
+
+基于 Phase D 预演产出的【草稿 `docs/phase-manuals/phase-D-操作手册-草稿.md`】+【预演日志 `docs/phase-manuals/phase-D-预演日志.md`】，定稿成最终可复现手册，让用户能从「阶段开始态」（Phase A/B/C 已完成 + Phase D 未部署）照着一步步重现。手册格式参考 `deploy/开关机操作.md` 风格；完整说明见 docs/14 §3.3。
+
+【定稿文件】**另存** `docs/phase-manuals/phase-D-meta-monitoring-操作手册.md`（草稿 `-草稿.md` **保留不覆盖**，供用户复现失败时回看 agent 原始记录）。
+
+【定稿核心：agent 预演视角 → 用户操作视角】
+草稿是 agent 预演视角（含 subagent-driven / 两段 review / RED-first / spec compliance 等 agent 内部流程）。定稿**去掉所有 agent 内部细节**，只留用户能照着复制粘贴的命令 + 预期输出：
+- **删**：subagent 派发 / spec review / code quality review / RED-first 验证 / "controller 核验" 等 agent 工作流（用户不关心）
+- **保留**：每步部署命令 + 预期输出 + 排障 + teardown
+- **Task1-3 脚本**（`inject-fault.sh` stop-replica / `assert-self-mon.sh` / `self-mon-check.sh`+verify-all）是 Git 纳管脚本（Phase D 预演已 commit），用户复现时 clone 即有 → 手册**不重写脚本内容**，只说"这些脚本已在 `deploy/verify/`（Phase D 已 commit），直接调用"+ 列调用命令
+- **Task4**（`prometheusrule-monitoring-self.yaml`）+ **Task7**（`values-phase-D.yaml`）是 `deploy/components/` 文件（Phase D commit），用户 `kubectl apply` / `helm upgrade` 直接用
+
+【手册结构（0-5，对齐 docs/14 §3.3）】
+
+**0. 前置凭据准备**（用户从零自备）：
+- `dingtalk-credentials-watchdog`（监控健康群加签）+ `dingtalk-credentials-main`（主告警群加签）—— Phase C 已建；用户复现前 `kubectl -n monitoring get secret` 确认在，缺则回 Phase C 手册建群+注入
+- SMTP（OQ-9 stub）：Task7 Step1 建占位 `smtp-credentials`（`<FILL_ME>`）；真实发信照草稿 §8 配（可选/生产前）
+- 给 Secret 创建命令模板（值留 `<FILL_ME>`），凭据型不入 Git（[[feedback_credential_export_pattern]]）
+
+**1. 前置状态**：阶段开始态 = Phase A/B/C 已完成（用户复现版留集群）+ Phase D 未部署（`monitoring-self-rules` CR 不在 / Email receiver 未加 / smtp Secret 未建）。`kubectl -n monitoring get prometheusrules,secret` 核对。
+
+**2. 步骤**（每步 = 完整命令 + 预期输出，逐行可对照，可复制粘贴）：
+- 部署 8 条自监控规则：`kubectl apply -f deploy/components/prometheusrule-monitoring-self.yaml` → `created`；`deploy/verify/self-mon-check.sh` → exit=0（GREEN）
+- Email DELTA overlay：smtp Secret 占位 + `helm template` 预检（python 断言）+ `helm upgrade` + 生效 config 断言（🔥 **必跑**，防毁 Phase B）
+- Email 真实配置见 §8（可选/生产前）
+- 每步预期输出对照：apply `created` / self-mon-check `exit=0` / 断言 `✓ 渲染核验通过` + `✓ 生效 config...` / verify-all `21 passed`
+
+**3. 验收**（AC-US4，用户跑）：
+- `assert-self-mon.sh alertmanager` → `[PASS] AlertmanagerDown firing`
+- `assert-self-mon.sh webhook` → `[PASS] DingtalkWebhookDown firing`
+- PrometheusDown / NotificationFailure / MonitoringDiskFull **降级**（health=ok / rate=0 / 0 series，决策声明 4/6/7）
+- Watchdog 心跳：**用户复现只验首条**（1h 内到达，降级）—— `assert-watchdog-delivery.sh` PASS
+- `verify-all.sh` → 21/21（含 Phase D `Meta-monitoring` 项）
+
+**4. 排障**（手册最值钱，不可省——Phase D 预演实测踩的坑）：
+- inject-fault stop-replica 用 **patch CR** 不是 scale statefulset（operator 秒级 reconcile）—— [[feedback_plan_assumptions_must_verify]]
+- assert-self-mon cleanup 顺序（AM 缩容 3→2 断 port-forward → **先 restore 副本 → 重起 pf → DELETE silence**，否则 silence 残留）
+- 🔥 **开机 recover.sh 卡**（kube-proxy fd crashloop + iptables 没配 → worker pod 连不上 apiserver 10.96.0.1）—— CLAUDE.md §7 已补全（containerd-nofile 提 ulimit + recover 容忍 CrashLoop + L1 restart 网络面）。用户复现若遇，跑 `recover.sh`（已修不卡）+ 必要时 `kubectl -n kube-system rollout restart ds kindnet kube-proxy`
+- helm chart repo `prometheus-community/kube-prometheus-stack --version 87.2.1`（非 plan 字面 `kube-prometheus-stack/...`）
+- Step5 jsonpath 双转义 `alertmanager\.yaml\.gz`（单转义返回 0 字节）
+- Email 排查（草稿 §8.5：StartTLS / Auth failed / DNS timeout）
+
+**5. teardown**（按 docs/14 §3.3 三类资源规则，反向命令）：
+- 新建型 delete：`kubectl delete -f deploy/components/prometheusrule-monitoring-self.yaml` + `git checkout deploy/verify/verify-all.sh`（回 self-mon-check 调用）；脚本（inject-fault stop-replica / self-mon-check / assert-self-mon）**保留**（Phase F 复用）
+- 修改型 helm upgrade 回前序：`helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack --version 87.2.1 -n monitoring -f kube-prometheus-stack.values.yaml -f values-phase-A.yaml -f values-phase-B.yaml`（不带 D，回 C 态）—— **不用 helm rollback**
+- 凭据型保留：`smtp-credentials`（回滚后单独 `kubectl delete secret`）/ `dingtalk-credentials-{watchdog,main}` / AM PVC（3×5Gi）
+- 故障注入 cleanup：`inject-fault.sh cleanup --all` + `cleanup stop-replica alertmanager` + `cleanup stop-replica webhook`
+- 资源清单 diff：`kubectl -n monitoring get prometheusrules,alertmanagerconfigs,deployments,secrets,configmaps -o name | diff - docs/phase-manuals/phase-D-start-state.txt`
+
+【定稿标准】
+- 草稿"agent 预演视角"→"用户操作视角"（去 agent 内部）
+- **补全预期输出**（用户对照判断成功）—— 这是草稿最缺的（草稿偏 agent 记录，缺用户对照的逐行预期）
+- 命令可独立复制粘贴（不依赖 agent context）
+- **禁 TODO/占位**，所有命令来自真实预演（草稿 + 日志）
+- Email §8（真实配置）**从草稿保留到定稿**（用户明确要求手册含 Email 配置方法）
+
+【用户复现边界（降级，docs/14 §3.3）】
+- Watchdog 1h 心跳：用户复现只验首条（agent 预演 ≥2h 验 2 条）
+- AC-US4 只验 firing 不验送达（决策声明 5，webhook 挂时送达死锁）
+- PrometheusDown / NotificationFailure / MonitoringDiskFull：规则部署 + health=ok 即通过（降级，不验 firing）
+
+定稿后停在【闭环③完成】，**不进** teardown（闭环④）/ 用户复现（闭环⑤）——那是提示词⑤。

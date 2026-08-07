@@ -1,0 +1,63 @@
+# values-phase-D.yaml —— Phase D M9 Email 增量 overlay（DELTA 写法，r2-Critical-1 修复）
+# helm 对 alertmanager.config: map 深合并（不写的 key 保留 B）、list 整体替换（必须完整写）。
+# D 只写增量；B 真值来源 helm get values kube-prometheus-stack -n monitoring --all（实测 2026-08-06）：
+#   parent repeat_interval=4h / critical route ri=1h / warning route ri=4h / inhibit 两条原文 / receivers URL 见下。
+alertmanager:
+  alertmanagerSpec:
+    secrets:                          # C3 新增：挂 SMTP Secret 到 /etc/alertmanager/secrets/smtp-credentials/
+      - smtp-credentials
+  config:
+    route:
+      routes:                         # list 整体替换 → 完整写 4 条（B 3 真值 + email-ops）
+        - matchers: ['alertname="Watchdog"']        # B[0] 原样
+          receiver: 'watchdog-only'
+          group_wait: 0s
+          group_interval: 1h
+          repeat_interval: 1h
+        - matchers: ['severity="critical"']         # B[1] 原样
+          receiver: 'dingtalk-actioncard-sms'
+          group_wait: 0s
+          repeat_interval: 1h
+        - matchers: ['severity="warning"']          # B[2] 真值 + D 改 continue:true
+          receiver: 'dingtalk-markdown'
+          group_wait: 30s
+          repeat_interval: 4h
+          continue: true              # D 改：继续匹配 email-ops 兜底
+        - matchers: ['severity="warning"']          # D 新增
+          receiver: 'email-ops'
+          group_wait: 5m
+    receivers:                        # list 整体替换 → 完整写 5 个（B 4 真值 + email-ops）
+      - name: 'default'               # B 真值 URL
+        webhook_configs:
+          - url: 'http://prometheus-webhook-dingtalk.monitoring.svc:8060/dingtalk/dingtalk-default/send'
+            send_resolved: true
+      - name: 'dingtalk-markdown'
+        webhook_configs:
+          - url: 'http://prometheus-webhook-dingtalk.monitoring.svc:8060/dingtalk/dingtalk-markdown/send'
+            send_resolved: true
+      - name: 'dingtalk-actioncard-sms'
+        webhook_configs:
+          - url: 'http://prometheus-webhook-dingtalk.monitoring.svc:8060/dingtalk/dingtalk-actioncard/send'
+            send_resolved: true
+          - url: 'http://sms-gateway.monitoring.svc:8080/alert'   # inert，Phase F M13
+            send_resolved: false
+      - name: 'watchdog-only'
+        webhook_configs:
+          - url: 'http://prometheus-webhook-dingtalk.monitoring.svc:8060/dingtalk/watchdog-health/send'
+            send_resolved: false
+      - name: 'email-ops'             # D 新增（M9，OQ-9 占位）
+        email_configs:
+          - to: '<FILL_ME>@example.com'
+            from: '<FILL_ME>@example.com'
+            smarthost: 'smtp.example.com:587'
+            auth_username: '<FILL_ME>'
+            auth_password_file: '/etc/alertmanager/secrets/smtp-credentials/password'
+            hello: 'localhost'
+            require_tls: true
+            send_resolved: true
+    # inhibit_rules: 不写（D 不改，helm 深合并保留 B 两条）
+    #   [0] severity=critical→warning equal=[namespace,alertname]
+    #   [1] alertname=~KubeWorkerNodeNotReady|KubeMasterNodeNotReady|MultipleWorkerNodesNotReady
+    #       → alertname=~KubePod.*|KubeContainer.* equal=[node]
+    # global.resolve_timeout / route parent map keys（group_by/group_wait/group_interval/repeat_interval/receiver）:
+    #   不写（深合并保留 B 真值，避免覆盖 4h）

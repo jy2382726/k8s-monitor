@@ -113,7 +113,10 @@ wsl --shutdown
   7890 代理泄漏由 `containerd-no-proxy.conf`（`NO_PROXY=*`）绕过。详见各 `deploy/containerd-certs.d/*/hosts.toml`。
 - **Pod netns wedge**（kind#2045）由 `recover.sh` 自愈（L1 重启网络面 → L2 重启涉及 deploy）；修复 = `rollout restart` 目标，不是重启节点。
 - **`verify-all.sh` 的 curl 检查带 `--max-time` 超时**：新增检查项时保持此约定，勿让脚本无限挂起。
-- **kube-proxy fd crashloop（kind worker 节点）**：`kube-system/kube-proxy-<worker>` 偶发 `CrashLoopBackOff`（`too many open files`，kind 节点 fd 限制），持续触发 `KubePodCrashLooping` 背景告警噪声。不影响集群功能，但污染 `notifications_total` 类收敛测试（见 memory `project_am_notification_test_pitfalls`）。治本可 `kubectl -n kube-system delete pod <kube-proxy-pod>` 重建清 fd。
+- **kube-proxy fd crashloop（kind 节点 fd ulimit soft=1024 顽疾）**：节点进程级 fd soft ulimit=1024（hard=1048576），kube-proxy（维护每 service 一条 iptables 规则，fd 大户）撞限制 `CrashLoopBackOff`（`too many open files`），持续触发 `KubePodCrashLooping` 背景告警噪声，污染 `notifications_total` 类收敛测试（见 memory `project_am_notification_test_pitfalls`）。
+  - **开机后更严重**：`wsl --shutdown` → worker iptables 重置 → kube-proxy 本该重新配 iptables，但 fd crashloop 配不了 → **worker pod 连不上 apiserver（`10.96.0.1` refused）→ argocd-server 等 CrashLoop → NodePort 坏**；且 `recover.sh` L79 等 kube-proxy Ready 必等满 120s（=recover "卡住不动"主因）。
+  - **治本① fd ulimit**：`deploy/containerd-nofile.conf`（`LimitNOFILE=65536`，经 `kind-config.yaml` extraMounts 挂 systemd drop-in，仅 `kind create cluster` 时生效）→ **普通 pod（alertmanager/argocd-server 等）继承 65536 不再 fd crashloop**。⚠️ kube-proxy（hostNetwork+privileged 走不同容器创建路径）**不继承**此 ulimit 仍 crashloop，属可接受噪声。已存在集群临时撑：`docker exec <node> printf '[Service]\nLimitNOFILE=65536\n' > /etc/systemd/system/containerd.service.d/zz-nofile.conf && systemctl restart containerd`（节点重启丢失）。
+  - **治本② recover 容忍 + 修网络**：`recover.sh` L79/L96 检测 kube-proxy CrashLoop 时**跳过漫长 wait**（不卡），流程进 L1 `rollout restart ds kindnet kube-proxy` → kube-proxy 启动配一次 iptables → worker 网络恢复。开机若手动修：`kubectl -n kube-system rollout restart ds kindnet kube-proxy`。
 
 ## 8. 工作流（action-oriented）
 

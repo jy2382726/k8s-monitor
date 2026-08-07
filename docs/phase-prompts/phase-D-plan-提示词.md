@@ -3,7 +3,8 @@
 - 用途：Phase D（Meta-monitoring）提示词集。下含：
     · 提示词②（闭环① writing-plans）—— 已执行，plan v3 定稿；保留作记录
     · 提示词③（闭环② agent 预演执行，subagent-driven-development）—— 已执行，预演完成（8 task GREEN + 草稿 + 日志）
-    · 提示词④（闭环③ 提炼可复现操作手册，草稿→定稿）—— 当前阶段
+    · 提示词④（闭环③ 提炼可复现操作手册，草稿→定稿）—— 已执行，定稿手册产出（commit 51416c2，485 行）
+    · 提示词⑤（闭环④ teardown 还原 + 闭环⑤ 用户复现）—— 当前阶段
 - 来源：基于 docs/14 §6 提示词②/③ 通用模板，填 Phase D 范围 + 注入实测教训。
 - 不改原文档：docs/14 §6 通用模板不动，本文件是 Phase D 专用副本。
 - ⚠️ 提示词② 段含 v1 初版假设（部分被 plan v2/v3 实测推翻，如 NotificationFailure 量纲 /

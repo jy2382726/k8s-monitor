@@ -1,6 +1,5 @@
 prometheusrule.monitoring.coreos.com/capacity-controlplane-rules
 prometheusrule.monitoring.coreos.com/core-rules
-prometheusrule.monitoring.coreos.com/monitoring-self-rules
 deployment.apps/kube-prometheus-stack-grafana
 deployment.apps/kube-prometheus-stack-kube-state-metrics
 deployment.apps/kube-prometheus-stack-operator
@@ -18,17 +17,6 @@ secret/prometheus-kube-prometheus-stack-prometheus
 secret/prometheus-kube-prometheus-stack-prometheus-thanos-prometheus-http-client-file
 secret/prometheus-kube-prometheus-stack-prometheus-tls-assets-0
 secret/prometheus-kube-prometheus-stack-prometheus-web-config
-secret/sh.helm.release.v1.kube-prometheus-stack.v10
-secret/sh.helm.release.v1.kube-prometheus-stack.v11
-secret/sh.helm.release.v1.kube-prometheus-stack.v12
-secret/sh.helm.release.v1.kube-prometheus-stack.v13
-secret/sh.helm.release.v1.kube-prometheus-stack.v4
-secret/sh.helm.release.v1.kube-prometheus-stack.v5
-secret/sh.helm.release.v1.kube-prometheus-stack.v6
-secret/sh.helm.release.v1.kube-prometheus-stack.v7
-secret/sh.helm.release.v1.kube-prometheus-stack.v8
-secret/sh.helm.release.v1.kube-prometheus-stack.v9
-secret/smtp-credentials
 secret/webhook-dingtalk-config
 configmap/kube-prometheus-stack-alertmanager-overview
 configmap/kube-prometheus-stack-apiserver

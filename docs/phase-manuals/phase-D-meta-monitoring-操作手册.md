@@ -370,9 +370,10 @@ Summary: 21 passed, 0 failed
 > 何时用：用户复现失败要重来 / 阶段废弃清理 / 给下一个 Phase 让出干净起点。**agent 在闭环④执行这套命令 + 资源清单 diff 核验还原彻底**（见预演日志 Task8 Step6）。
 
 ```bash
-# ===== ① 新建型（delete）：删 Phase D 新建的 CR + 回退 verify-all 改动 =====
+# ===== ① 新建型（delete）：删 Phase D 新建的 CR =====
 kubectl delete -f deploy/components/prometheusrule-monitoring-self.yaml   # monitoring-self-rules CR
-git checkout deploy/verify/verify-all.sh                                   # 回退 self-mon-check 调用（回前序版本）
+# verify-all.sh 的 self-mon-check 调用（L67-68）是 Phase D 永久代码（commit 进 Git），teardown 不撤（撤 = 撤销 Phase D 代码）
+# → teardown 后 verify-all 的 Meta-monitoring 项因 CR 撤除而预期 FAIL（见末尾 verify-all 核验），其余 20 项全绿 = Phase C 基线
 # 脚本（inject-fault.sh stop-replica / self-mon-check.sh / assert-self-mon.sh）：保留（Phase F 复用，Git 纳管，不删）
 
 # ===== ② 修改型（helm upgrade 回前序，不用 helm rollback）：不带 values-phase-D.yaml = 回 C 态 =====
@@ -397,9 +398,14 @@ deploy/verify/inject-fault.sh cleanup stop-replica webhook
 **资源清单 diff 核验还原彻底**（闭环④专用，对比阶段开始态基准）：
 ```bash
 kubectl -n monitoring get prometheusrules,alertmanagerconfigs,deployments,secrets,configmaps -o name \
+  | grep -v 'sh\.helm\.release\.v1' \
   | diff - docs/phase-manuals/phase-D-start-state.txt
 ```
-预期：**无 diff 输出**（空 = 资源清单完全回到阶段开始态）。有 diff = teardown 不彻底，按 diff 补 delete/apply。
+预期：**无 diff 输出**（空 = 业务资源清单完全回到阶段开始态 Phase C 末态）。有 diff = teardown 不彻底，按 diff 补 delete/apply。
+
+> ℹ️ **排除 `sh.helm.release.v1.*`**：helm release secret 的 revision 单调累积（每次 `helm upgrade` +1），是 diff 噪声源、不反映业务资源状态，故对比时排除。`start-state.txt` 本身在生成时也排除了（只含 CR / deploy / 业务 secret / configmap；已由闭环④修正——旧版误含 Phase D 产物 monitoring-self-rules + smtp-credentials）。
+
+**verify-all 核验**：teardown 后跑 `deploy/verify/verify-all.sh`，预期 **20 PASS + 1 预期 FAIL**（`Meta-monitoring`/self-mon-check 项——CR 已撤 = Phase C 末态本无此项）。若要严格 20/20 全绿核验 Phase C 基线：临时注释 `verify-all.sh` 的 self-mon-check 调用两行（L67-68），跑完恢复（agent 闭环④用此法：临时 `git checkout <Phase C commit> -- verify-all.sh` 跑 20/20 再恢复 HEAD）。
 
 ---
 

@@ -321,18 +321,31 @@ exit=0
 
 这三项 AC-US4 **不验 firing**（MVP 死锁 / 0 series / 真实触发是上游限流），只验「规则部署 + health=ok」，§2.2 health 核验已覆盖。PrometheusDown 降级理由（决策声明 4）：prometheus 挂 → 评估停 → 自身告警发不出（元悖论），生产靠 Watchdog 兜底。
 
-### 3.4 Watchdog 心跳送达监控健康群（用户复现只验首条）
+### 3.4 Watchdog 心跳送达监控健康群
+
+Phase D 有正式 Watchdog 规则（`vector(1)`），心跳走**正式规则**（不用 Phase C 的合成 connector 脚本——见末尾 ⚠️）。验两层：
+
+**(a) connector 链路**（webhook → 钉钉监控健康群）——直接 POST webhook，绕开 AM group 时序：
 
 ```bash
-deploy/verify/assert-watchdog-delivery.sh 2>&1 | tail -20
+kubectl -n monitoring port-forward svc/prometheus-webhook-dingtalk 18060:8060 &>/tmp/pf-wd.log &
+sleep 3
+curl -s -w "\nHTTP %{http_code}\n" -X POST "http://localhost:18060/dingtalk/watchdog-health/send" \
+  -H "Content-Type: application/json" \
+  -d '{"version":"4","groupKey":"debug","status":"firing","receiver":"watchdog-only","groupLabels":{},"commonLabels":{"alertname":"Watchdog"},"commonAnnotations":{},"externalURL":"","alerts":[{"status":"firing","labels":{"alertname":"Watchdog","severity":"none"},"annotations":{"summary":"Watchdog connector 验证"},"startsAt":"2026-08-07T05:20:00Z","endsAt":"2026-08-07T06:00:00Z"}]}'
+kubectl -n monitoring logs deploy/prometheus-webhook-dingtalk --tail=3 | grep resp_status
+pkill -f "port-forward svc/prometheus-webhook-dingtalk"
 ```
 
-预期（合成 Watchdog → watchdog-only → webhook-dingtalk → resp_status=200，connector 链路通）：
-```
-[PASS] ... resp_status=200 ...
-```
+预期：`HTTP 200` + webhook 日志 `uri=.../watchdog-health/send resp_status=200`。监控健康群收到一条 Watchdog 验证心跳卡片。
 
-正式 Watchdog 心跳（`vector(1)` 永真，apply 后 firing → AM `group_wait:0s` → 监控健康群）：**首条约 2min 内送达**。用户复现验：监控健康群收到第一条 Watchdog 心跳卡片（宽松上限 1h；agent 预演 ≥2h 验了 2 条，用户复现只验首条 = 降级）。
+**(b) 正式 Watchdog 心跳**（AM 自动 dispatch）——看监控健康群首条：
+
+- AM route 已在 §2.3 验证（Watchdog → watchdog-only）
+- 正式 Watchdog（`vector(1)` 永真）由 AM 按 `group_wait:0s / group_interval:1h / repeat_interval:1h` dispatch
+- ⚠️ **时序坑**：AM 重启（§2.4 helm upgrade 触发 rolling）后，正式 Watchdog group 创建于 gossip settle 前，`group_wait:0s` 首次 flush 窗口错过 → **首条正式心跳在 AM 重启后 ~1h（group_interval）送达**，之后每 1h。用户复现以「AM 重启时间 + 1h」为宽松上限看首条
+
+> ⚠️ **不要用 `assert-watchdog-delivery.sh`**：那是 Phase C 脚本（Phase C 无正式 Watchdog，合成独立 group，`group_wait:0s` 立即 dispatch）。Phase D 有正式 Watchdog 占了 watchdog-only group，脚本注入的合成 Watchdog 与正式 `group_by [alertname,namespace,severity]` 一致 → 合并进同 group，不触发新 dispatch；叠加 AM 重启时序，脚本等 30s 必 FAIL。Phase D 用 (a) connector curl + (b) 正式心跳。详见 §4 排障。
 
 ### 3.5 verify-all 全绿
 
@@ -361,6 +374,7 @@ Summary: 21 passed, 0 failed
 | 🔥 **开机后 `recover.sh` 卡住不动**（等 kube-proxy Ready 满 120s） | kind 节点 fd soft ulimit=1024 顽疾 → kube-proxy fd 耗尽 crashloop → iptables 没配 → worker pod 连不上 apiserver（10.96.0.1 refused）→ argocd-server 等 CrashLoop | 已根治（CLAUDE.md §7）：① `deploy/containerd-nofile.conf`（LimitNOFILE=65536，普通 pod 继承）② `recover.sh` 检测 kube-proxy CrashLoop 时跳过漫长 wait ③ L1 `rollout restart ds kindnet kube-proxy` 重配 iptables。用户复现若仍遇：跑 `recover.sh`（已修不卡）+ 必要时 `kubectl -n kube-system rollout restart ds kindnet kube-proxy` |
 | `helm` 报 `repo "kube-prometheus-stack" not found` / chart 找不到 | plan 字面写的 `kube-prometheus-stack/kube-prometheus-stack` 是错的；实测 helm repo 注册名是 `prometheus-community/kube-prometheus-stack` | 本手册所有 helm 命令已用实测真名 `prometheus-community/kube-prometheus-stack --version 87.2.1`（`--version` 固定防漂移）。若仍报 not found：`helm repo add prometheus-community https://prometheus-community.github.io/helm-charts && helm repo update` |
 | Step D 的 jsonpath 返回空 / 0 字节 | `alertmanager.yaml.gz` 单转义 `.gz` 被当字段访问 | 必须双转义：`-o jsonpath='{.data.alertmanager\.yaml\.gz}'`（本手册已写对） |
+| `assert-watchdog-delivery.sh` FAIL（`resp_status=200 未确认`） | 该脚本是 **Phase C 设计**（合成 Watchdog 独立 group，`group_wait:0s` 立即 dispatch）。Phase D §2.2 部署了正式 Watchdog（`vector(1)`）占了 watchdog-only group；脚本注入的合成 Watchdog `group_by [alertname,namespace,severity]` 与正式一致 → **合并进同 group 不触发新 dispatch**；叠加 AM 重启（§2.4 helm upgrade）后 `group_wait:0s` 首次 flush 窗口在 gossip settle 前错过，首条要等 `group_interval=1h` | Phase D **不用此脚本**。§3.4 改用：① 直接 `curl webhook /dingtalk/watchdog-health/send` 验 connector（resp_status=200）② 看监控健康群正式心跳（AM 重启后 ~1h） |
 | Email 排查（`StartTLS` / `535 Auth failed` / `i/o timeout`） | SMTP 端口/协议错 / 用了登录密码非授权码 / DNS 网络不通 | 见 §6.5 排查表（真实发信时） |
 
 ---

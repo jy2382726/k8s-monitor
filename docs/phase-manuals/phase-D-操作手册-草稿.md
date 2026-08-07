@@ -144,6 +144,100 @@ deploy/verify/inject-fault.sh cleanup stop-replica webhook
 
 ---
 
+## 8. Email 真实配置（生产前激活 stub）
+
+Phase D 部署的 Email 是 stub（`smtp.example.com` + `<FILL_ME>`，不真实发信）。**生产前**（或本地想验证时）按下述激活真实发信。此章是 OQ-9 降级的"反操作"——MVP 验收不依赖它（prd §外部依赖不阻塞 MVP done）。
+
+### 8.1 前置：邮箱 + SMTP 授权码
+
+选邮箱服务商，在邮箱设置里**开 SMTP 并生成授权码**（授权码 ≠ 登录密码）：
+
+| 邮箱 | smarthost | 取授权码 |
+|---|---|---|
+| QQ 邮箱 | `smtp.qq.com:587` | 设置→账户→开 SMTP→生成授权码 |
+| 163 邮箱 | `smtp.163.com:587` | 设置→POP3/SMTP→开启→设授权码 |
+| 企业微信邮箱 | `smtp.exmail.qq.com:587` | 企业邮箱管理后台 |
+| Gmail | `smtp.gmail.com:587` | 需"应用专用密码"（先开两步验证） |
+| Exchange/公司邮箱 | IT 给的 smarthost | **OQ-9：需 IT 确认 MFA/应用密码策略** |
+
+统一用 **587 + STARTTLS**（与 `email_configs.require_tls: true` 对应；不要用 465 隐式 SSL）。
+
+### 8.2 填凭据（两处）
+
+**(1) `smtp-credentials` Secret（授权码，不入 Git）**：
+```bash
+kubectl -n monitoring create secret generic smtp-credentials \
+  --from-literal=username='你的邮箱@qq.com' \
+  --from-literal=password='你的SMTP授权码' \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+**(2) `deploy/components/values-phase-D.yaml` 的 `email_configs`（改占位）**：
+```yaml
+      - name: 'email-ops'
+        email_configs:
+          - to: '收件人@qq.com'                    # 接收告警的邮箱（可与 from 同）
+            from: '你的邮箱@qq.com'                 # 发件邮箱（通常 = SMTP 登录账号）
+            smarthost: 'smtp.qq.com:587'           # 你的 SMTP 服务器:端口
+            auth_username: '你的邮箱@qq.com'         # SMTP 登录账号（通常 = 邮箱）
+            auth_password_file: '/etc/alertmanager/secrets/smtp-credentials/password'  # 读 Secret
+            hello: 'localhost'
+            require_tls: true                      # STARTTLS
+            send_resolved: true
+```
+> **入 Git 策略**：`smarthost`（SMTP 服务器地址）可入 Git；个人邮箱地址（`to`/`from`/`auth_username`）介意暴露的话，可改成 Secret 挂载或用 `deploy/.secrets/values-phase-D-local.yaml` 本地覆盖（不入 Git，[[feedback_credential_export_pattern]]）。
+
+### 8.3 helm upgrade + 预检（同 Task7 纪律，防毁 Phase B）
+
+```bash
+# (1) upgrade 前预检（python schema 断言，任一失败禁止 upgrade）
+helm template kube-prometheus-stack prometheus-community/kube-prometheus-stack --version 87.2.1 \
+  -n monitoring -f deploy/components/kube-prometheus-stack.values.yaml \
+  -f deploy/components/values-phase-A.yaml -f deploy/components/values-phase-B.yaml \
+  -f deploy/components/values-phase-D.yaml > /tmp/d-render.yaml
+python3 -c "<plan Task7 Step3 的 11 项断言>"   # 必须 ✓ 渲染核验通过
+
+# (2) helm upgrade
+helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack --version 87.2.1 \
+  -n monitoring -f deploy/components/kube-prometheus-stack.values.yaml \
+  -f deploy/components/values-phase-A.yaml -f deploy/components/values-phase-B.yaml \
+  -f deploy/components/values-phase-D.yaml
+
+# (3) upgrade 后生效 config 断言（decode generated secret，确认 B 链路完整 + email-ops 到位）
+kubectl -n monitoring get secret alertmanager-kube-prometheus-stack-alertmanager-generated \
+  -o jsonpath='{.data.alertmanager\.yaml\.gz}' | base64 -d | gunzip > /tmp/am-live.yaml
+python3 -c "<plan Task7 Step5 断言>"   # 必须 ✓ 生效 config ... Phase B 未被毁
+```
+
+### 8.4 验连通性（触发 warning 看邮件到达）
+
+等一条 warning 告警 firing（或人工触发），确认三点：
+1. **钉钉主群收到**（`continue:true`，warning 先发钉钉 markdown）
+2. **邮箱收到** 告警邮件（email-ops receiver，`send_resolved:true` 则 resolved 也发）
+3. **AM log 无 SMTP error**：
+   ```bash
+   kubectl -n monitoring logs -l app.kubernetes.io/name=alertmanager --tail=50 | grep -iE 'email|smtp|notify|error'
+   ```
+
+**人工触发 warning**（可选，验完改回）：临时把某 warning 规则 expr 改成永真，如 GrafanaDown：
+```bash
+kubectl -n monitoring edit prometheustrule monitoring-self-rules
+# 把 GrafanaDown 的 expr: absent(up{job="kube-prometheus-stack-grafana"} == 1)
+# 临时改成: vector(1)   → 保存 → 等 for 5m firing → 验邮件 → 改回原 expr
+```
+
+### 8.5 常见排查
+
+| AM log 错误 | 原因 | 修法 |
+|---|---|---|
+| `StartTLS not supported` / `502` | smarthost 端口/协议错 | 用 587（STARTTLS），勿用 465（SSL）；`require_tls:true` |
+| `535 Auth failed` / `535 5.7.3` | 授权码错 / username 不匹配 | 用**授权码**不是登录密码；`auth_username` = 邮箱 |
+| `lookup smtp.xxx.com ... i/o timeout` | DNS/网络不通 | 见 §7 坑3（worker fd/iptables，recover L1 修网络面） |
+| AM 无 error 但邮件没到 | 垃圾箱 / from 被服务商拒 | 查垃圾箱；from 用真实邮箱；部分服务商拒 from=未验证域名 |
+| `connection refused` | smarthost 写错 / 端口被防火墙挡 | 核对 smarthost；`kubectl exec` 进 AM pod `nc -vz smtp.qq.com 587` 测连通 |
+
+---
+
 ## 待④定稿事项
 
 - [ ] 改"用户复现视角"（去掉 agent 预演内部细节，留用户可照做的步骤）

@@ -39,6 +39,9 @@ nodes:
       - hostPath: /root/projects/k8s-monitor/deploy/containerd-no-proxy.conf
         containerPath: /etc/systemd/system/containerd.service.d/zz-no-proxy.conf
         readOnly: true
+      - hostPath: /root/projects/k8s-monitor/deploy/containerd-nofile.conf
+        containerPath: /etc/systemd/system/containerd.service.d/zz-nofile.conf
+        readOnly: true
 
   # 第 2 个节点: worker
   - role: worker
@@ -54,6 +57,9 @@ nodes:
       - hostPath: /root/projects/k8s-monitor/deploy/containerd-no-proxy.conf
         containerPath: /etc/systemd/system/containerd.service.d/zz-no-proxy.conf
         readOnly: true
+      - hostPath: /root/projects/k8s-monitor/deploy/containerd-nofile.conf
+        containerPath: /etc/systemd/system/containerd.service.d/zz-nofile.conf
+        readOnly: true
 
   # 第 3 个节点: worker
   - role: worker
@@ -68,6 +74,9 @@ nodes:
         readOnly: true
       - hostPath: /root/projects/k8s-monitor/deploy/containerd-no-proxy.conf
         containerPath: /etc/systemd/system/containerd.service.d/zz-no-proxy.conf
+        readOnly: true
+      - hostPath: /root/projects/k8s-monitor/deploy/containerd-nofile.conf
+        containerPath: /etc/systemd/system/containerd.service.d/zz-nofile.conf
         readOnly: true
 
 # containerdConfigPatches: 修改 kind 节点内部 containerd 的配置

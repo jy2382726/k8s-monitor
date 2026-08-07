@@ -502,4 +502,16 @@ kubectl -n monitoring edit prometheustrule monitoring-self-rules
 
 ## 附：用户复现记录
 
-> （用户照本手册复现后填写：日期 + 通过的 AC + 与手册的偏差。agent 不代填。）
+- **日期**：2026-08-07
+- **复现者**：用户手动复现（集群 `kind-k8s-monitor-dev`）
+- **通过的 AC（AC-US4 全部）**：
+  - ✅ `assert-self-mon.sh alertmanager` → AlertmanagerDown firing（`for` 2m 内，PVC 全程=3）
+  - ✅ `assert-self-mon.sh webhook` → DingtalkWebhookDown firing（`for` 2m 内）
+  - ✅ PrometheusDown / NotificationFailure / MonitoringDiskFull 降级通过（§2.2 health=ok 覆盖）
+  - ✅ Watchdog 心跳送达监控健康群：**13:30**（connector curl 触发）+ **14:10**（正式 Watchdog，AM 重启 05:09 + `group_interval` 1h ≈ 06:09 UTC）
+  - ✅ `verify-all.sh` → **21 passed, 0 failed**（含 `[PASS] Meta-monitoring: 8 自监控规则加载 + Watchdog firing（Phase D）`）
+- **与手册的偏差**：
+  1. **§3.4 改写**：原 `assert-watchdog-delivery.sh`（Phase C 合成 connector 脚本）FAIL。Root cause：Phase D §2.2 部署的正式 Watchdog（`vector(1)`）占了 watchdog-only group，脚本注入的合成 Watchdog 与其 `group_by [alertname,namespace,severity]` 一致 → 合并进同 group 不触发新 dispatch；叠加 AM 重启（§2.4 helm upgrade）后 `group_wait:0s` 首次 flush 窗口在 gossip settle（05:09:18）前错过，首条要等 `group_interval=1h`。脚本等 30s 必 FAIL（**非复现错误，是脚本不兼容 Phase D 正式 Watchdog 场景**）。已改用直接 `curl webhook /dingtalk/watchdog-health/send`（resp_status=200）+ 看监控健康群正式心跳。手册 §3.4/§4 已修正（commit `cfe87f0`）。
+  2. **AM cluster gossip WARN**（`failed to join <旧 pod-IP>:9094` i/o timeout）：teardown / §2.4 helm upgrade 触发 AM rolling 换 pod IP，gossip 收敛期单次残留 WARN（指向已删旧 pod IP），`cluster_members=3` quorum 完整，正常可忽略。
+  3. **闭环④修正 `start-state.txt`**：旧版误拍成 Phase D 部署态（含 monitoring-self-rules + smtp-credentials + revision v13），重拍为真 Phase C 末态（排除 helm release secret 噪声）+ 手册 §5 diff 加 `grep -v sh.helm.release.v1`（commit `b7dc46a`）。
+- **结论**：Phase D（Meta-monitoring）**阶段完成** —— 双轨验收通过（agent 预演 8 task GREEN + 用户复现 AC-US4 全过）。

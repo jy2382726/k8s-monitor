@@ -1,0 +1,83 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: monitoring-self-rules
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: monitoring-self-rules   # 命名标识（ruleSelector={} 空，不参与匹配）
+    release: kube-prometheus-stack                   # 对齐 core-rules 风格
+    phase: D
+spec:
+  groups:
+    - name: watchdog
+      rules:
+        - alert: Watchdog
+          expr: vector(1)
+          labels:
+            severity: "none"
+          annotations:
+            summary: "监控心跳（Watchdog）"
+            description: "每 1h 发到独立监控健康群。停止更新 = 监控系统挂了（prd §6.5 / 06 §3.10.2）。"
+    - name: monitoring-self
+      rules:
+        - alert: PrometheusDown
+          # C1：up 有 2 target（prometheus + config-reloader sidecar），对齐 06 行 721 用 absent(up==1)。
+          expr: absent(up{job="kube-prometheus-stack-prometheus"} == 1)
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Prometheus Down"
+            description: "Prometheus 所有 scrape target 都不 up。⚠️ MVP 死锁：prometheus 挂→评估停→发不出，生产靠 Watchdog 兜底（决策声明 4）。"
+        - alert: AlertmanagerDown
+          # 偏离 06 行 730（count(up==1)<3 在 6 target 语义不符），改用 cluster_members 反映 quorum（决策声明 3）。
+          expr: max(alertmanager_cluster_members) < 3
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Alertmanager 副本不足 3"
+            description: "alertmanager_cluster_members = {{ $value }}（< 3，quorum 受损）。实测 3 副本稳态=3。"
+        - alert: GrafanaDown
+          # m1：Grafana 有 metrics，对齐 06 行 737 用 absent(up==1)。
+          expr: absent(up{job="kube-prometheus-stack-grafana"} == 1)
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Grafana Down"
+            description: "Grafana 所有 scrape target 都不 up。MVP 阶段 Grafana 仅 UI 层（execute_alerts:false），down 不阻断告警链路（warning）。"
+        - alert: DingtalkWebhookDown
+          # webhook v2.1.0 无 metrics → 用 KSM deployment 副本（决策声明 2）。
+          expr: kube_deployment_status_replicas_available{namespace="monitoring",deployment="prometheus-webhook-dingtalk"} < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "prometheus-webhook-dingtalk Down"
+            description: "⚠️ webhook 是通知通道，挂了告警送达也失败（靠 Watchdog/Email 兜底）。firing 可查，送达死锁（决策声明 5）。"
+        - alert: NotificationFailure
+          # C2：对齐 06 行 751 用 rate(failed[5m])>0.1 无分母（避免 0/0=NaN）。AC-US4 不验 firing（决策声明 7 降级）。
+          expr: sum(rate(alertmanager_notifications_failed_total{integration="webhook"}[5m])) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "告警通知失败 rate >0.1（webhook）"
+            description: "5m 内 webhook 通知失败 rate > 0.1/s（06 行 751 量纲）。AC-US4 不验 firing（决策声明 7）。"
+        - alert: RuleEvaluationFailure
+          expr: sum(increase(prometheus_rule_evaluation_failures_total[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Prometheus 规则评估失败"
+            description: "5m 内出现规则评估失败（prometheus_rule_evaluation_failures_total increase>0）。查 Prometheus 日志 / Rules 配置语法。"
+        - alert: MonitoringDiskFull
+          expr: sum(kubelet_volume_stats_used_bytes{namespace="monitoring"}) / sum(kubelet_volume_stats_capacity_bytes{namespace="monitoring"}) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "monitoring PVC 用量 >85%"
+            description: "⚠️ kind 上 kubelet_volume_stats 无 series（cAdvisor 不报 hostPath），规则 inactive；生产换真实 storageClass 后生效（决策声明 6）。"

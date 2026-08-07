@@ -76,7 +76,15 @@ banner "等节点 Ready + kube-system 核心 pod Running"
 kubectl wait --for=condition=ready node --all --timeout=180s >/dev/null 2>&1 || warn "节点 Ready 等待超时（继续观察）"
 ok "节点 Ready"
 # 核心网络组件必须先起来，否则后面的 verify 全是假阴性
-kubectl -n kube-system wait pod -l k8s-app=kube-proxy --for=condition=Ready --timeout=120s >/dev/null 2>&1 || warn "kube-proxy 未 Ready"
+# kube-proxy 特判：kind 节点 fd ulimit 低（soft=1024）致 CrashLoop 是已知顽疾（CLAUDE.md §7）。
+# 开机后 iptables 重置时 kube-proxy 配不了规则 → worker pod 连不上 apiserver（10.96.0.1）。
+# CrashLoop 时等 Ready 必等满 timeout（=recover "卡住不动"主因）——检测到 CrashLoop 直接跳过，
+# 让流程进入 L1 restart 网络面去修（restart 后 kube-proxy 启动会配一次 iptables，足够恢复 worker 网络）。
+if kubectl -n kube-system get pods -l k8s-app=kube-proxy --no-headers 2>/dev/null | grep -q CrashLoopBackOff; then
+  warn "kube-proxy CrashLoopBackOff（kind fd 顽疾 CLAUDE.md §7），跳过 Ready 等待，交给 L1 restart 修网络面"
+else
+  kubectl -n kube-system wait pod -l k8s-app=kube-proxy --for=condition=Ready --timeout=120s >/dev/null 2>&1 || warn "kube-proxy 未 Ready"
+fi
 kubectl -n kube-system wait pod -l k8s-app=kindnet    --for=condition=Ready --timeout=120s >/dev/null 2>&1 || warn "kindnet 未 Ready"
 kubectl -n kube-system wait pod -l k8s-app=kube-dns   --for=condition=Ready --timeout=120s >/dev/null 2>&1 || warn "coredns 未 Ready"
 ok "kube-system 核心 pod 就绪"
@@ -85,15 +93,19 @@ ok "kube-system 核心 pod 就绪"
 banner "第 1 次健康检查"
 fails=$(run_verify)
 if [ "$fails" -eq 0 ]; then
-  printf "\n${G}✅ 集群健康，16/16 通过，无需恢复。${N}\n"; exit 0
+  printf "\n${G}✅ 集群健康，verify-all 全部通过，无需恢复。${N}\n"; exit 0
 fi
 warn "检测到 $fails 项失败，进入自愈"
 
 # ---- L1：网络面（kind#2045 的节点路由/iptables 陈旧变体）----
 banner "L1 恢复：重启 kindnet + kube-proxy（网络面）"
 kubectl -n kube-system rollout restart ds kindnet kube-proxy >/dev/null 2>&1 || true
-kubectl -n kube-system rollout status ds/kindnet    --timeout=120s >/dev/null 2>&1 || true
-kubectl -n kube-system rollout status ds/kube-proxy --timeout=120s >/dev/null 2>&1 || true
+kubectl -n kube-system rollout status ds/kindnet --timeout=120s >/dev/null 2>&1 || true
+# kube-proxy fd crashloop 时 rollout 永不完成（新 pod 仍撞 ulimit 1024），不等 status（避免又卡 120s）；
+# restart 已触发 kube-proxy 启动配一次 iptables，足够恢复 worker 网络（CLAUDE.md §7）。
+if ! kubectl -n kube-system get pods -l k8s-app=kube-proxy --no-headers 2>/dev/null | grep -q CrashLoopBackOff; then
+  kubectl -n kube-system rollout status ds/kube-proxy --timeout=120s >/dev/null 2>&1 || true
+fi
 sleep 5   # 给路由/iptables 一点重建时间
 fails=$(run_verify)
 if [ "$fails" -eq 0 ]; then

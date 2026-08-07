@@ -52,6 +52,9 @@ deploy/verify/*
 !deploy/verify/assert-dingtalk-delivery.sh
 !deploy/verify/assert-watchdog-delivery.sh
 !deploy/verify/measure-mttd.sh
+# Phase D 元监控（AC-US4 停副本断言 + L0 自监控检查）
+!deploy/verify/assert-self-mon.sh
+!deploy/verify/self-mon-check.sh
 !**/.gitkeep
 
 # ---- 日志 / 临时 / 备份 ---------------------------------------

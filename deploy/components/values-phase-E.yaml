@@ -1,0 +1,11 @@
+# values-phase-E.yaml —— Phase E M10 Grafana execute_alerts:false 增量 overlay（DELTA）
+# 当前态实测（2026-08-10 /api/admin/settings）：unified_alerting.execute_alerts='true'（Grafana 13.1.0
+#   内置默认，user values/grafana.ini/env 均未显式覆盖）。
+# 06 §3.10/§3.12 + prd §8.3 强制 false（规则评估始终由 Prometheus，Grafana 仅 UI 层）。
+# DELTA：只动 grafana.grafana.ini.unified_alerting.execute_alerts；不写 alertmanager.config
+#   （B/D 真值由 helm 深合并保留，沿用 Phase D DELTA 写法，避免 v2-Critical-1 类覆盖事故）。
+# grafana.ini 是纯 map（无 list），新增 unified_alerting section 是纯增量，深合并安全。
+grafana:
+  grafana.ini:
+    unified_alerting:
+      execute_alerts: false

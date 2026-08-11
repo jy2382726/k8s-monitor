@@ -432,14 +432,14 @@ kubectl -n monitoring get prometheusrules,configmaps,ingress -o name \
 
 **verify-all + execute_alerts 核验**：
 ```bash
-./deploy/verify/verify-all.sh 2>&1 | grep Summary          # 预期: 21 passed, 0 failed（SLO 项随 CR 撤除而 FAIL，见下注）
+./deploy/verify/verify-all.sh 2>&1 | grep Summary          # 预期: 21 passed, 1 failed（仅 SLO 项，见下注——CR 已撤的预期表现，非残留）
 PWD_ADMIN=$(kubectl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
 kubectl -n monitoring get cm kube-prometheus-stack-grafana -o jsonpath='{.data.grafana\.ini}' | grep -E '^\['   # 预期: 5 行（无 [unified_alerting]）
 curl -s --max-time 8 -u "admin:${PWD_ADMIN}" http://localhost:30030/api/admin/settings \
   | python3 -c "import sys,json;print('execute_alerts =', json.load(sys.stdin)['unified_alerting']['execute_alerts'])"   # 预期: execute_alerts = true
 ```
 
-> ℹ️ **teardown 后 verify-all 是 20 PASS + 1 预期 FAIL**（`SLO: 4 个资源 SLI recording rules 有数据` 项——CR 已撤 = Phase D 末态本无此项）。若要严格 21/21 全绿核验 Phase D 基线：临时 `git checkout 6977802 -- deploy/verify/verify-all.sh` 跑 21/21 再恢复 HEAD（agent 闭环④用此法）。
+> ℹ️ **teardown 后 verify-all 是 21 PASS + 1 预期 FAIL**（`SLO: 4 个资源 SLI recording rules 有数据` 项——CR 已撤，slo-check 找不到数据；其余 21 项全 PASS = Phase D 基线完整）。若要严格 21/0 全绿核验 Phase D 基线：临时 `git checkout 6977802 -- deploy/verify/verify-all.sh` 跑 21/21 再恢复 HEAD（agent 闭环④用此法）。
 >
 > ⚠️ **slo-check 验 RED 等 ≥5min**（lookback-delta，见 §4），或信 `/api/v1/rules?type=record` 的 group count=0（即时准确）。
 

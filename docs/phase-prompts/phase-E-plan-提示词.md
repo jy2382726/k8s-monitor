@@ -2,8 +2,8 @@
 元信息（非提示词正文，复制时从此行下方开始）
 - 用途：Phase E（SLO + Dashboard）提示词集。下含：
     · 提示词②（闭环① writing-plans，单阶段 plan）—— 已执行，plan v2.1 定稿（两轮共 6-lens 对抗审查 + 主 Claude 实测核验 + round-2 Lens D 真加载验证）
-    · 提示词③（闭环② agent 预演执行，subagent-driven-development）—— **当前阶段（下一步）**
-    · 提示词④（闭环③ 定稿手册，草稿→定稿）/ ⑤（闭环④ teardown + 闭环⑤ 用户复现）—— 待预演完成后依次整理
+    · 提示词③（闭环② agent 预演执行，subagent-driven-development）—— 已执行（2026-08-11，验收门全过：L0 SLI 有数据 + L1 Dashboard 可读 + execute_alerts=false + verify-all 22/22；teardown 已还原回 Phase D 末态）
+    · 提示词④（闭环③ 定稿手册，草稿→定稿）/ ⑤（闭环④ teardown + 闭环⑤ 用户复现）—— 已整理（预演完成后，见下文）
 - 来源：基于 docs/14 §6 提示词② 通用模板，填 Phase E 范围（M8 SLO + M10 Dashboard + 横切 M12 Ingress）+ 注入实测教训。
 - 不改原文档：docs/14 §6 通用模板不动，本文件是 Phase E 专用副本。
 - 产物路径（plan 编写后）：plan → docs/superpowers/plans/2026-08-10-phase-E-slo-dashboard.md；
@@ -121,6 +121,112 @@ plan 存 **`docs/superpowers/plans/2026-08-10-phase-E-slo-dashboard.md`**（日�
 
 ---
 
-## 提示词④ / ⑤（待预演完成后整理，占位）
+## 提示词④ —— 提炼可复现操作手册（Phase E 闭环③，预演成功后定稿）
 
-后续提示词④（闭环③ 定稿手册，草稿→定稿，存 `docs/phase-manuals/phase-E-slo-dashboard-操作手册.md`）/ ⑤（闭环④ teardown 还原 + 闭环⑤ 用户复现，阶段完成判定）待 Phase E 预演（提示词③）跑通后，按 docs/14 §6 通用模板 + Phase E 范围依次整理（参考 `docs/phase-prompts/phase-D-plan-提示词.md` 的 ④⑤ 结构）。
+基于 Phase E 预演产出的【草稿 `docs/phase-manuals/phase-E-操作手册-草稿.md`】+【预演日志 `docs/phase-manuals/phase-E-预演日志.md`】，定稿成最终可复现手册，让用户能从「阶段开始态」（Phase A/B/C/D 已完成 + Phase E 未部署）照着一步步重现。手册格式参考 `deploy/开关机操作.md` 风格；完整说明见 docs/14 §3.3。
+
+【定稿文件】**另存** `docs/phase-manuals/phase-E-slo-dashboard-操作手册.md`（草稿 `-草稿.md` **保留不覆盖**，供用户复现失败时回看 agent 原始记录）。
+
+【定稿核心：agent 预演视角 → 用户操作视角】
+草稿是 agent 预演视角（含 subagent-driven / 两段 review / RED-first / spec compliance / "主 Claude live 核验证伪" 等 agent 内部流程）。定稿**去掉所有 agent 内部细节**，只留用户能照着复制粘贴的命令 + 预期输出：
+- **删**：subagent 派发 / spec review / code quality review / RED-first 验证 / "controller 核验" / "live 核验" 等 agent 工作流（用户不关心）
+- **保留**：每步部署命令 + 预期输出 + 排障 + teardown
+- Phase E 文件预演已 commit（worktree 分支 `worktree-worktree-phase-E-slo-dashboard`，待合并 main；commit 链 `d88cc1b`→`bab7f5a`）：
+  · 脚本 `deploy/verify/slo-check.sh` + `assert-dashboard.sh`（含 `--max-time 8`）+ `verify-all.sh`（加 slo-check 调用）+ `.gitignore`（白名单）
+  · 组件 `deploy/components/prometheusrule-slo-recording.yaml` + `values-phase-E.yaml` + `grafana-dashboard-cluster-overview-zh.yaml`
+  · 用户合并 main 后 clone 即有 → 手册**不重写文件内容**，只说"这些文件已在 `deploy/`（Phase E 已 commit），直接 apply / helm upgrade -f 调用" + 列命令
+
+【手册结构（0-5，对齐 docs/14 §3.3）】
+
+**0. 前置凭据准备**：**无新凭据**（Phase E 不引入 Secret）。Grafana admin 密码是 kps 部署产物（Secret `kube-prometheus-stack-grafana` key `admin-password`，随机生成、非用户凭据），目视验收/排障时 decode 进 shell var 只读（`PWD_ADMIN=$(kubectl ... | base64 -d)`），**不入文件不 echo**（绕过 auto-mode 凭据物化护栏）。前置凭据段一句话注"无新凭据"即可。
+
+**1. 前置状态**：阶段开始态 = Phase A/B/C/D 已完成（用户复现版留集群）+ Phase E 未部署：`slo-recording-rules` CR 不在 / `grafana-dashboard-cluster-overview-zh` CM 不在 / `execute_alerts=true`（Grafana 13.1.0 默认）/ grafana.ini 5 section / `grafana.local` Ingress 已在（reuse）。`kubectl -n monitoring get prometheusrules,cm` + Grafana `/api/admin/settings` 核对；`verify-all.sh` → **21/21**。
+> ⚠️ 若开机后 verify-all 漂移（如 ArgoCD NodePort 30080 不通 = Pod netns wedge），先 `kubectl -n <ns> rollout restart deploy/<name>` 修到 21/21 再起 Phase E（见排障）。
+
+**2. 步骤**（每步 = 完整命令 + 预期输出，逐行可对照，可复制粘贴）：
+- Task1+2 脚本已在 `deploy/verify/`（Phase E 已 commit + verify-all.sh 已加 slo-check 调用）→ 用户**无需手动建脚本**，直接进 Task3
+- Task3 部署 4 SLI recording rules：`kubectl apply -f deploy/components/prometheusrule-slo-recording.yaml` → `created`；condition-based wait（12×5s loop）→ `deploy/verify/slo-check.sh` 4 行 `= 1` + exit=0；health 核验 4 rule 全 `ok`
+- Task4 execute_alerts:false：🔥 `helm template` 渲染预检（python 断言 `[unified_alerting]` + 原 5 section 全在）→ `helm upgrade --version 87.2.1 -f kube-prometheus-stack.values.yaml -f values-phase-A.yaml -f values-phase-B.yaml -f values-phase-D.yaml -f values-phase-E.yaml`（**锁版本 + 仓库名 `prometheus-community`**）→ `rollout status` + execute_alerts=false（API `/api/admin/settings`）+ grafana.ini **6 section**（主验，防深合并毁前序）+ `am-route-check.sh exit=0`
+- Task5 dashboard CM：`kubectl apply -f deploy/components/grafana-dashboard-cluster-overview-zh.yaml` → 等 sidecar ~35s（看 `grafana-sc-dashboard` 日志确认发现）→ `deploy/verify/assert-dashboard.sh` 两 PASS + exit=0
+- 每步预期输出对照：apply `created` / slo-check `4 行 =1 exit=0` / 渲染预检 `✓` / upgrade `VERSION 87.2.1` + execute_alerts `false` + `✓ 6 section` / assert-dashboard 两 PASS
+
+**3. 验收**（无 hard AC，支撑性阶段 = 「有数据 + 可读」，breakdown ③⑦）：
+- L0 `deploy/verify/slo-check.sh` → 4 行 `[slo] <record> = 1` + exit=0
+- L1 `deploy/verify/assert-dashboard.sh` → 两 PASS（dashboard 可读 + execute_alerts=false）+ exit=0
+- `deploy/verify/verify-all.sh` → **22 passed, 0 failed**（21 baseline + 新增 SLO 项）
+- **目视**（人工，闭环⑤ 用户复现时看）：浏览器开 Grafana（NodePort 30030 / `grafana.local`）→ 集群总览 dashboard，确认 4 row 折叠 / stat threshold 设色（满血绿）/ panel 9 稳态显 0 绿（非 No data）/ namespace 选择器切换只影响 namespace table
+
+**4. 排障**（手册最值钱，不可省——Phase E 预演实测踩的坑，草稿 §4 已详，定稿保留并精简）：
+- 🔥 **I-1（已知·生产前修·复现时勿当 bug 报）**：dashboard「节点 Ready 率」panel 在节点部分故障时显假绿（`cluster:nodes_ready:ratio` 的 `avg(... == 1)` 丢 NotReady series，verbatim 自 06 §3.12.3）。**kind 满血不触发**（4 ratio 全=1 绿是正常）；生产割接前 patch `specs/research/06 §3.12.3` 去 `== 1` + re-apply CR。其余 3 SLI sound，告警路径 KubeWorkerNodeNotReady 不受影响。
+- 🔥 **helm upgrade 必锁 `--version 87.2.1`**：不锁拉 latest 87.16.1 毁 A/B/C/D 基线；仓库名 `prometheus-community/kube-prometheus-stack`（非 `kube-prometheus-stack/...`→repo not found）。
+- **lookback-delta 坑**：teardown 删 slo-recording-rules CR 后 ~5min 内 slo-check 返 stale 假 `=1`（Prometheus `query.lookback-delta=5m` 留末样本）——验"已删"信 `/api/v1/rules?type=record` group count=0（即时准确），或等 ≥5min 再判 RED。
+- recording rule 冷启动 ~55-60s（condition-based wait 12×5s，别盲 sleep）。
+- port-forward 到 prometheus 不稳 → 改 `kubectl get --raw .../proxy/api/v1/query`；Grafana API 用 NodePort 30030（免 port-forward）。
+- Task4 plan 笔误：Step4 port-forward service 名是 `-grafana`（plan 误写 `-prometheus`）；curl 带 `--max-time 8`（CLAUDE.md §7）。
+- 开机 netns wedge（verify-all 漂移，如 ArgoCD NodePort）→ `kubectl -n <ns> rollout restart deploy/<name>` 重建 pod 刷新 netns（CLAUDE.md §7）。
+
+**5. teardown**（按 docs/14 §3.3 三类资源规则，反向命令；草稿 §5 已详）：
+- 新建型 delete：`kubectl delete -f deploy/components/prometheusrule-slo-recording.yaml` + `kubectl delete -f deploy/components/grafana-dashboard-cluster-overview-zh.yaml`
+- 修改型 helm upgrade 回 D：`helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack --version 87.2.1 -n monitoring -f kube-prometheus-stack.values.yaml -f values-phase-A.yaml -f values-phase-B.yaml -f values-phase-D.yaml`（**不带 E**，回 D 态 execute_alerts=true/5 section）—— **不用 helm rollback**
+- 凭据型：**无新凭据**（Grafana admin 密码 Secret 保留，Phase E 未动）
+- verify-all.sh slo-check 调用行回退：`git checkout <pre-phase-E-ref> -- deploy/verify/verify-all.sh`（文件级，**勿用 git revert**——Task1 commit 打包了 slo-check.sh + .gitignore，revert 过度回退删掉它们）；`slo-check.sh`/`assert-dashboard.sh` **保留**（Phase F 复用）
+- Phase E **无 inject-fault** → 跳过 `inject-fault.sh cleanup --all`
+- 资源清单 diff：`kubectl -n monitoring get prometheusrules,configmaps,ingress -o name | diff - docs/phase-manuals/phase-E-start-state.txt`（确认 Phase E 增量已清，只剩 Phase A-D）
+
+【定稿标准】
+- 草稿"agent 预演视角"→"用户操作视角"（去 agent 内部流程）
+- **补全预期输出**（用户对照判断成功）——草稿已有大部分，核对补齐逐行预期
+- 命令可独立复制粘贴（不依赖 agent context）
+- **禁 TODO/占位**，所有命令来自真实预演（草稿 + 日志）
+
+【用户复现边界】Phase E 支撑性阶段无 hard AC，**无降级**（breakdown ⑦）。dashboard 中文化 / 四要素面板渲染是人工目视（闭环⑤），自动化只验「可读 + 结构」。
+
+定稿后停在【闭环③完成】，**不进** teardown（闭环④）/ 用户复现（闭环⑤）——那是提示词⑤。
+
+---
+
+## 提示词⑤ —— teardown 还原 + 用户复现（Phase E 阶段完成判定）
+
+分两步：**步骤一（agent 做）** teardown 还原到阶段开始态；**步骤二（用户做）** 照定稿手册复现，跑通验收门 = 阶段完成。
+
+【步骤一（agent 做）—— 闭环④ teardown 还原】
+执行定稿手册 `docs/phase-manuals/phase-E-slo-dashboard-操作手册.md` 的 teardown 章节（§5），把 agent 预演增量还原到「阶段开始态」（Phase A/B/C/D 产物 + M1 基座，**不动这些**）。用 superpowers:verification-before-completion 兜底。
+> ℹ️ **闭环②预演已执行过 teardown**（Task 6 Step5，cluster 已在 Phase D 末态）。本步骤一主要是**确认 + 查残留**（除非手册定稿期间又部署了 Phase E）：
+1. `./deploy/verify/verify-all.sh` → **Summary: 21 passed, 0 failed**（Phase D 基线，无 Phase E SLO 项）。注：分支 verify-all.sh 含 slo-check 调用——若 slo-recording-rules CR 已删，SLO 项 FAIL 是预期（非残留）；要跑干净 21/21 可 `git show <pre-phase-E-ref>:deploy/verify/verify-all.sh | bash`。
+2. Phase E 增量已清核对：`kubectl -n monitoring get prometheusrules,configmaps,ingress -o name | diff - docs/phase-manuals/phase-E-start-state.txt` → 只剩 Phase A-D 资源（无 `slo-recording-rules` / 无 `grafana-dashboard-cluster-overview-zh`）。
+3. Grafana 回 D 态：`execute_alerts=true` + grafana.ini 5 section（NodePort 30030 查 `/api/admin/settings`）。
+4. **lookback-delta**：核 slo-recording-rules 已删时信 `/api/v1/rules?type=record` group count=0（即时准确），或 slo-check 等 ≥5min 再判 RED（勿撞 stale 假绿）。
+5. Phase E **无 inject-fault** → 跳过 `inject-fault.sh cleanup --all`。
+
+若 diff 有残留（Phase E 资源未清）→ 补 teardown 命令（手册 §5）再验，直到干净 + verify-all 21/21（或 SLO 项的 FAIL 确属"CR 已删"而非残留）。
+
+【步骤二（用户做）—— 闭环⑤ 用户复现】
+用户照定稿手册 `docs/phase-manuals/phase-E-slo-dashboard-操作手册.md` 从「阶段开始态」（Phase D 末态）手动复现一遍 Phase E：Task3 apply SLI CR → Task4 helm upgrade execute_alerts:false → Task5 apply dashboard CM → 跑验收门。
+**跑通验收门 = Phase E 阶段完成**：
+- L0 `deploy/verify/slo-check.sh` → 4 ratio = 1 + exit=0
+- L1 `deploy/verify/assert-dashboard.sh` → 两 PASS + exit=0
+- `deploy/verify/verify-all.sh` → **22 passed, 0 failed**
+- 目视 dashboard 四要素面板渲染（4 row / threshold 设色 / panel9 稳态 0 绿 / namespace 选择器）
+
+【用户复现边界（agent 只答疑不代跑，docs/14 §3.3 + §7.2 取舍 4）】
+- 用户照手册自己操作（复制粘贴 OK），**agent 不代敲/代改**
+- 用户卡住时，agent 用 superpowers:systematic-debugging 协助 root-cause（**先查脚本/时序不是查集群**，memory `feedback_k8s_test_script_discipline`），但不替用户操作
+- 时间紧可临时降级"卡住处可代跑"（需用户明示）
+- **I-1 提醒用户**：dashboard「节点 Ready 率」kind 满血显 1.0 绿是正常的（4 SLI 全满血）；该 panel 节点部分故障假绿是已知生产前修项（手册 §4 / 排障 I-1），复现时勿当 bug 报。
+- dashboard 中文化 / 四要素面板渲染是**人工目视验收**，自动化只验「可读 + 结构」。
+
+【用户复现失败回路（docs/14 §3.3）】
+- (a) 排障/措辞问题 → 直接改定稿手册，用户从失败步重试（不重跑预演）
+- (b) 步骤/命令问题（部署逻辑变）→ 修手册 + 重跑闭环②预演确认，再交用户复现
+
+【用户复现成功 → 阶段完成收尾】
+用户复现跑通后，在定稿手册末尾附「用户复现记录」：日期（2026-08-XX）+ 通过的验收门（L0/L1/verify-all 22-0 + 目视项）+ 与手册的偏差（若有）。
+**Phase E 阶段完成 = 用户复现通过**（agent 预演②只证手册可信，docs/14 §3.3）。
+
+【阶段完成后】
+- worktree 分支 `worktree-worktree-phase-E-slo-dashboard` 合并 main + push origin（按 worktree push 策略，阶段完成统一 push，不单独 push 中间 commit）。
+- 集群留在「Phase E 用户复现版」（阶段开始态 + Phase E，作为 Phase F 的阶段开始态）。
+- 更新 memory `project_phase_e_preview_done` → 标 Phase E 完全收尾（仿 `project_phase_d_preview_pause`）。
+- 下一步 Phase F（全量故障演练 + MTTD 达标，待其提示词①）。
+
+> ⚠️ **生产割接前必修 I-1**（不阻塞 Phase E 验收，但阻断生产可用）：patch `specs/research/06 §3.12.3` 去 `== 1` + re-apply `slo-recording-rules` CR，否则 dashboard 节点 Ready 率生产档假绿。

@@ -1,0 +1,145 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-cluster-overview-zh
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"   # kiwigrid sidecar 发现 key（实测 kps 内置 dashboard 同 label，只需此一个）
+    app.kubernetes.io/name: cluster-overview-zh
+    release: kube-prometheus-stack
+    phase: E
+data:
+  cluster-overview-zh.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [
+        {"title": "kps 内置：节点总览（Node Exporter/Nodes）", "type": "link", "url": "/d/7d57716318ee0dddbac5a7f451fb7753/nodes", "targetBlank": true},
+        {"title": "kps 内置：集群资源（Compute Resources/Cluster）", "type": "link", "url": "/d/efa86fd1d0c121a26444b636a3f509a8/k8s-resources-cluster", "targetBlank": true},
+        {"title": "kps 内置：API Server", "type": "link", "url": "/d/09ec8aa1e996d6ffcd6817bbaff4db1b/apiserver", "targetBlank": true}
+      ],
+      "liveNow": false,
+      "panels": [
+        {"type": "row", "title": "① SLO 健康态势", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}, "id": 100, "collapsed": false, "panels": []},
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 0.96}]}, "unit": "percentunit", "decimals": 2, "description": "SLO ≥96%（27/28 节点）· 集群级"}, "overrides": []},
+          "gridPos": {"h": 5, "w": 6, "x": 0, "y": 1}, "id": 1,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "cluster:nodes_ready:ratio", "legendFormat": "", "refId": "A"}],
+          "title": "节点 Ready 率", "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 0.95}]}, "unit": "percentunit", "decimals": 2, "description": "SLO ≥95% · 集群级"}, "overrides": []},
+          "gridPos": {"h": 5, "w": 6, "x": 6, "y": 1}, "id": 2,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "cluster:pods_ready:ratio", "legendFormat": "", "refId": "A"}],
+          "title": "Pod Ready 率", "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 0.999}]}, "unit": "percentunit", "decimals": 3, "description": "SLO ≥99.9%（控制面核心 P0）· 集群级"}, "overrides": []},
+          "gridPos": {"h": 5, "w": 6, "x": 12, "y": 1}, "id": 3,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "cluster:apiserver_up:ratio", "legendFormat": "", "refId": "A"}],
+          "title": "API Server 可用性", "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 0.99}]}, "unit": "percentunit", "decimals": 2, "description": "SLO ≥99%（监控系统自身 P0）· 含 config-reloader sidecar target · 集群级"}, "overrides": []},
+          "gridPos": {"h": 5, "w": 6, "x": 18, "y": 1}, "id": 4,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "monitoring:prometheus_up:ratio", "legendFormat": "", "refId": "A"}],
+          "title": "Prometheus 在线率", "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}, "unit": "short"}, "overrides": []},
+          "gridPos": {"h": 6, "w": 24, "x": 0, "y": 6}, "id": 5,
+          "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false, "reducer": ["sum"], "countRows": false, "fields": ""}},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum by (namespace) (kube_pod_status_ready{condition=\"true\",namespace=~\"$namespace\"})", "format": "table", "instant": true, "legendFormat": "__auto", "refId": "A"}],
+          "title": "各命名空间 Ready Pod 数（受 $namespace 选择器控制；其余面板为集群级）", "type": "table"
+        },
+        {"type": "row", "title": "② 容量风险", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 12}, "id": 101, "collapsed": false, "panels": []},
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 0.85}, {"color": "red", "value": 0.9}]}, "unit": "percentunit", "decimals": 2, "description": "阈值对齐 NodeCPUUsageHigh（>90% P1）· 集群级"}, "overrides": []},
+          "gridPos": {"h": 6, "w": 8, "x": 0, "y": 13}, "id": 6,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))", "legendFormat": "", "refId": "A"}],
+          "title": "节点 CPU 平均使用率", "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 0.9}, {"color": "red", "value": 0.95}]}, "unit": "percentunit", "decimals": 2, "description": "阈值对齐 NodeMemoryUsageHigh（>95% P1）· 集群级"}, "overrides": []},
+          "gridPos": {"h": 6, "w": 8, "x": 8, "y": 13}, "id": 7,
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "1 - sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)", "legendFormat": "", "refId": "A"}],
+          "title": "节点内存平均使用率", "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}, "unit": "short", "description": "DiskPressure / MemoryPressure / PIDPressure 节点数（>0 即 P1 告警）· 集群级"}, "overrides": []},
+          "gridPos": {"h": 6, "w": 8, "x": 16, "y": 13}, "id": 8,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(kube_node_status_condition{condition=~\"DiskPressure|MemoryPressure|PIDPressure\",status=\"true\"})", "legendFormat": "", "refId": "A"}],
+          "title": "节点压力（Disk/Mem/PID Pressure）", "type": "stat"
+        },
+        {"type": "row", "title": "③ 告警态势", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 19}, "id": 102, "collapsed": false, "panels": []},
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}, "unit": "short", "description": "排除 Watchdog 心跳（severity=none）的真实活跃告警数 · 集群级 · 稳态=0（or vector(0) 防 count 空向量显示 No data）"}, "overrides": []},
+          "gridPos": {"h": 6, "w": 8, "x": 0, "y": 20}, "id": 9,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "count(ALERTS{alertstate=\"firing\",severity!=\"none\"}) or vector(0)", "legendFormat": "", "refId": "A"}],
+          "title": "当前活跃告警（除心跳）", "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}, "unit": "short", "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}}, "overrides": []},
+          "gridPos": {"h": 6, "w": 16, "x": 8, "y": 20}, "id": 10,
+          "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false, "reducer": ["sum"], "countRows": false, "fields": ""}},
+          "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "count(ALERTS{alertstate=\"firing\"}) by (severity)", "format": "table", "instant": true, "legendFormat": "__auto", "refId": "A"}],
+          "title": "firing 告警按 severity 分布（含 Watchdog 心跳 none）", "type": "table"
+        },
+        {"type": "row", "title": "④ P0/P1 快速入口 + 说明", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 26}, "id": 103, "collapsed": false, "panels": []},
+        {
+          "datasource": {"type": "datasource", "uid": "grafana"},
+          "fieldConfig": {"defaults": {}, "overrides": []},
+          "gridPos": {"h": 9, "w": 24, "x": 0, "y": 27}, "id": 11,
+          "options": {"content": "## 集群总览 · 四要素\n\n**① SLO 健康态势**｜**② 容量风险**｜**③ 告警态势**｜**④ P0/P1 快速入口**\n\n### SLO 健康度（内部参考，非对外承诺）\n\n| SLI | SLO 目标 | 含义 |\n|---|---|---|\n| 节点 Ready 率 | ≥96%（27/28） | 允许 1 节点故障 |\n| Pod Ready 率 | ≥95% | 允许少量 Pod 异常 |\n| API Server 可用性 | ≥99.9% | 控制面核心（P0） |\n| Prometheus 在线率 | ≥99% | 监控系统自身（P0） |\n\n### P0/P1 快速入口\n\n- **P0 场景**：API Server 不可达 / etcd 副本不足 / Prometheus 挂 → kps 内置 [API Server](/d/09ec8aa1e996d6ffcd6817bbaff4db1b/apiserver) / [Prometheus](/d/9fa0d141-d019-4ad7-8bc5-42196ee308bd/prometheus) dashboard + 钉钉 ActionCard（@值班+备份）\n- **P1 场景**：单 worker NotReady / 副本不足 / 节点压力 → kps 内置 [节点总览](/d/7d57716318ee0dddbac5a7f451fb7753/nodes) / [集群资源](/d/efa86fd1d0c121a26444b636a3f509a8/k8s-resources-cluster) dashboard\n- 排障不依赖 UI：钉钉消息自包含 kubectl 命令 + 公网 Runbook（prd §6.3）\n\n### 说明\n\n- 规则评估**始终由 Prometheus**（`execute_alerts:false`，prd §8.3）；Grafana 仅 UI 层。\n- `namespace` 选择器仅作用于「各命名空间 Ready Pod 数」面板；其余面板为集群级聚合。\n- **cluster label 统一 deferred**（kind 单集群无 cluster label，prd §6.2；生产多集群割接时加）。\n- kind 3 节点稳态：SLO 全满血、容量低（CPU≈2%）、告警仅 Watchdog 心跳——正常参考态。\n- 此 dashboard 由 ConfigMap 管理（`allowUiUpdates:false`），修改请改 Git 后 sidecar 自动 reload。"},
+          "title": "快速入口 + 说明",
+          "type": "text"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "tags": ["SLO", "k8s-monitor", "phase-E", "集群总览"],
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": "label_values(kube_pod_status_ready, namespace)",
+            "refresh": 1,
+            "includeAll": true,
+            "multi": false,
+            "sort": 1,
+            "current": {"selected": true, "text": "All", "value": "$__all"},
+            "hide": 0
+          }
+        ]
+      },
+      "time": {"from": "now-1h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "集群总览 · SLO 健康 · 容量 · 告警",
+      "uid": "k8smon-cluster-overview-zh",
+      "version": 1,
+      "weekStart": ""
+    }

@@ -461,3 +461,21 @@ curl -s --max-time 8 -u "admin:${PWD_ADMIN}" http://localhost:30030/api/admin/se
 **已知遗留（不阻断 Phase E）**：
 1. **I-1**（§4）：`cluster:nodes_ready:ratio` 节点部分故障假绿——生产割接前必修（patch `06 §3.12.3` 去 `== 1` + re-apply CR）。
 2. **中文化 / 四要素面板渲染**：自动化只验「可读 + 结构」，目视渲染（row 折叠 / threshold 设色 / panel 9 稳态 0 绿）留 §3.4 用户复现确认。
+
+---
+
+## 附：用户复现记录
+
+- **日期**：2026-08-11
+- **复现者**：用户手动复现（集群 `kind-k8s-monitor-dev`）
+- **通过的验收门**：
+  - ✅ **L0 SLI 有数据**：4 ratio 全 `= 1`（`SLO` 项在 verify-all 内 PASS）
+  - ✅ **L1 Dashboard 可读 + execute_alerts=false**：`execute_alerts=false` 由 §2.3 Step D ③ API 实测确认；dashboard 可读由 §3.4 目视确认（`assert-dashboard.sh` 脚本未单独跑，但其两断言已被上述两步双覆盖，substance 已证）
+  - ✅ **verify-all**：`Summary: 22 passed, 0 failed`
+  - ✅ **目视四要素**（§3.4）：4 row 折叠 / 4 SLO stat 满血显 1 绿 / panel 9「当前活跃告警」稳态显 0 绿（非 No data）/ namespace 选择器只影响 id5 namespace table
+- **与手册的偏差**：
+  1. **ArgoCD NodePort 30080 复现中途 FAIL**（worker 节点跨节点数据面 wedge，kind 多节点挂机恢复的固有顽疾，手册 §1/§4 已警告，**与 Phase E 无关**）。agent 分层取证排除了 pod netns / kube-proxy 规则 / 路由 / iptables FORWARD / conntrack（全正常，静态配置无误），定位为 worker 节点数据面 wedge。**用户跑 `./deploy/verify/recover.sh`（L1 restart kindnet/kube-proxy）即修复**——argocd-server pod 未动（仍在 worker、同 pod IP 10.244.2.13），recover.sh 直接重建网络数据面清掉 wedge，22/0 稳态。
+     - **教训（已纠正 agent 误判）**：静态路由/iptables 看着对 ≠ 数据面健康；restart kindnet/kube-proxy 会重建 veth / flush conntrack / 重同步，能清掉这种深 wedge。**遇此类 NodePort 超时，先跑 `recover.sh`，无效再 `docker restart <节点>`**（别上来就 restart pod 或节点）。
+  2. **手册 §5 teardown verify-all 预期数 off-by-one**（定稿时照抄 Phase D 的「20 PASS」未改成 Phase E 的「21」，实际 `21 passed, 1 failed`）→ 已修正（commit `0793cdb`）。
+  3. **agent 侧目视核验方式**：因 Grafana admin 密码不入对话的纪律（Playwright 沙箱内无法非物化登录），agent 改用 **API 深度核验**等价确认 §3.4 四要素——拉 dashboard JSON 模型（4 row / 8 stat / 2 table / 1 text / namespace 模板变量）+ 实跑每个 stat 面板 PromQL（4 SLO=1、panel 9=0 标量非空向量、id8 节点压力=0）+ grep 确认仅 id5 引用 `$namespace`。用户侧浏览器目视正常通过。
+- **结论**：Phase E（SLO + Dashboard）**阶段完成** —— 双轨验收通过（agent 预演②6 Task GREEN + 用户复现③④⑤跑通验收门）。集群留「Phase E 用户复现版」作为 Phase F 阶段开始态。

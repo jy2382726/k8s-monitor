@@ -66,6 +66,8 @@ check "prometheus-webhook-dingtalk: Pod Ready + Service:8060 + healthy（Phase C
   "deploy/verify/dingtalk-check.sh"
 check "Meta-monitoring: 8 自监控规则加载 + Watchdog firing（Phase D）" \
   "deploy/verify/self-mon-check.sh"
+check "SLO: 4 个资源 SLI recording rules 有数据（Phase E M8）" \
+  "deploy/verify/slo-check.sh"
 check "kubectl top nodes works" \
   "kubectl top nodes >/dev/null 2>&1"
 check "echo-server reachable via Ingress" \

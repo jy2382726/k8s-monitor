@@ -55,6 +55,8 @@ deploy/verify/*
 # Phase D 元监控（AC-US4 停副本断言 + L0 自监控检查）
 !deploy/verify/assert-self-mon.sh
 !deploy/verify/self-mon-check.sh
+!deploy/verify/slo-check.sh
+!deploy/verify/assert-dashboard.sh
 !**/.gitkeep
 
 # ---- 日志 / 临时 / 备份 ---------------------------------------

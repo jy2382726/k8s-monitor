@@ -1,8 +1,6 @@
 prometheusrule.monitoring.coreos.com/capacity-controlplane-rules
 prometheusrule.monitoring.coreos.com/core-rules
 prometheusrule.monitoring.coreos.com/monitoring-self-rules
-prometheusrule.monitoring.coreos.com/slo-recording-rules
-configmap/grafana-dashboard-cluster-overview-zh
 configmap/kube-prometheus-stack-alertmanager-overview
 configmap/kube-prometheus-stack-apiserver
 configmap/kube-prometheus-stack-cluster-total

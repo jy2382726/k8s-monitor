@@ -1,0 +1,29 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: slo-recording-rules
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: slo-recording-rules   # 命名标识（ruleSelector={} 空，不参与匹配）
+    release: kube-prometheus-stack                 # 对齐 core-rules / monitoring-self-rules 风格
+    phase: E
+spec:
+  groups:
+    - name: slo-recording.rules
+      rules:
+        # 1. 集群节点可用性（SLO ≥96%，27/28，prd §6.7 / 06 §3.12.4）
+        #    kube_node_status_condition 本身有 condition/status label（CLAUDE.md §3：KSM 自定义 label 在 kube_node_labels，此处不涉）
+        - record: cluster:nodes_ready:ratio
+          expr: avg(kube_node_status_condition{condition="Ready",status="true"} == 1)
+        # 2. Pod 健康率（SLO ≥95%）：分子=sum(ready=true) 计 ready pod 数，分母=sum(all) 计 pod 总数
+        #    （每 pod 有 3 个 condition series（true/false/unknown）恰好 1 个 value=1，故 sum(all)=pod 总数；决策声明 5 实测 ratio 数学正确）
+        - record: cluster:pods_ready:ratio
+          expr: |
+            sum(kube_pod_status_ready{condition="true"})
+            / sum(kube_pod_status_ready)
+        # 3. API Server 可用性（SLO ≥99.9%，控制面核心 P0）
+        - record: cluster:apiserver_up:ratio
+          expr: avg(up{job="apiserver"})
+        # 4. Prometheus 在线率（SLO ≥99%，监控系统自身 P0）：2 target（prometheus + config-reloader），决策声明 6
+        - record: monitoring:prometheus_up:ratio
+          expr: avg(up{job="kube-prometheus-stack-prometheus"})

@@ -1,6 +1,7 @@
 <!--
 元信息（非提示词正文，复制时从此行下方开始）
-- 用途：Phase F（GitOps + 收尾 = MVP done 最终门）提示词集。本文件先落 提示词①（= docs/14 §6 提示词② 单阶段 plan 专版，启动 Phase F / 闭环① writing-plans）；提示词②③④⑤（agent 预演 / 定稿手册 / teardown / 用户复现）待 plan 出 + 预演跑通后按 Phase E 模板（docs/phase-prompts/phase-E-plan-提示词.md）依次整理。
+- 用途：Phase F（GitOps + 收尾 = MVP done 最终门）提示词集。本文件先落 **提示词②**（docs/14 §6 提示词② 单阶段 plan 专版 = 闭环① writing-plans，启动 Phase F）；提示词③④⑤（agent 预演 / 定稿手册 / teardown+用户复现）待 plan 出 + 预演跑通后按 Phase E 模板（docs/phase-prompts/phase-E-plan-提示词.md）依次整理。
+- 编号约定：docs/14 §6 提示词①（阶段切分，配合 brainstorming）**一次性，已 done**（`docs/superpowers/specs/2026-07-10-phase-breakdown-design.md` 即其产物）；**每个 Phase 从 提示词② 起**（② plan / ③ 预演 / ④ 手册 / ⑤ teardown+复现）。闭环编号（双轨验收 5 步）与提示词号差一：提示词②=闭环①（plan）→ 提示词③=闭环②（预演）→ 提示词④=闭环③（手册）→ 提示词⑤=闭环④⑤（teardown+复现）。
 - 来源：基于 docs/14 §6 提示词② 通用模板，填 Phase F 范围（M11 GitOps + M13 SmsProvider NoOp + M14b Runbook/值班手册/演练 + M15 全量演练/MTTD/baseline 对齐，横切 M12 Ingress 收尾）+ 前序实测教训。
 - 不改原文档：docs/14 §6 通用模板不动，本文件是 Phase F 专用副本。
 - 产物路径（plan 编写后）：plan → docs/superpowers/plans/<date>-phase-F-mvp-done.md；
@@ -10,7 +11,7 @@
 - Phase F 特点：**最大阶段 + AC 最多 + MVP done 最终门**。范围横跨 4 个 M（M11/M13/M14b/M15）+ 横切 M12 收尾；验收 = 9 AC 全闭环（含前序推迟至此的 AC-US1/US3/NFR-01 统计/NFR-02/NFR-03）+ verify-all 全绿 + recover.sh 自愈。有 hard blocker OQ（OQ-1 Git 仓库位置，阻塞 M11）。MTTD 是北极星（L2 测量型，非 RED）。F 完成后集群 = MVP 完整态，不清回。
 -->
 
-# 提示词① —— 启动 Phase F（= docs/14 §6 提示词② 单阶段 plan 专版，闭环① writing-plans）
+# 提示词② —— 单阶段 plan（Phase F 闭环①，启动 Phase F）
 
 > ⚠️ **Phase F 是最大 + 最复杂阶段（MVP done 最终门）。强烈建议 plan 前先用 `superpowers:brainstorming` 收口范围**——哪些 M 在本期 / OQ-1 Git 仓库位置如何决议 / 是否拆子阶段 / MTTD 的 N 取多少。范围清晰后再进 writing-plans。Phase E 因范围清晰直接进 plan；**F 不行**——4 个 M + 3 个待决议 OQ + 9 AC，必须先收口（否则 plan 会反复返工）。
 
@@ -89,11 +90,11 @@ plan 存 **`docs/superpowers/plans/<date>-phase-F-mvp-done.md`**（日期用 pla
 
 ---
 
-## 提示词②③④⑤ —— 待 plan 出 + 预演跑通后按 Phase E 模板整理
+## 提示词③④⑤ —— 待 plan 出 + 预演跑通后按 Phase E 模板整理
 
-Phase F 的 agent 预演执行（②）/ 定稿手册（③）/ teardown+用户复现（④⑤）提示词，待 Phase F plan（闭环①）定稿 + agent 预演（闭环②）跑通后，按 **`docs/phase-prompts/phase-E-plan-提示词.md`** 的②③④⑤ 模板依次整理（结构一致，填 Phase F 范围 + 预演实测教训）。
+Phase F 的 agent 预演执行（提示词③）/ 定稿手册（提示词④）/ teardown+用户复现（提示词⑤），待 Phase F plan（提示词② = 闭环①）定稿 + agent 预演（闭环②）跑通后，按 **`docs/phase-prompts/phase-E-plan-提示词.md`** 的③④⑤ 模板依次整理（结构一致，填 Phase F 范围 + 预演实测教训）。
 
-**Phase F 预演/复现特殊点（届时填入②③④⑤ 时注意）：**
+**Phase F 预演/复现特殊点（届时填入③④⑤ 时注意）：**
 - **MTTD 用户复现降级**：agent 预演跑全量 5 类×N 取中位；用户复现每类故障抽验 1 次（链路通 + 单次不爆表）——5×N×5 类太久，抽验保可信。
 - **F 完成后集群不清回**（MVP 完整态，作生产割接起点，不同于 A–E 的回阶段开始态）。
 - **reachability 盲区勿当 bug**（ArgoCD NodePort 网络层 wedge 零告警，docs/11 §8 #24 + memory `project_monitoring_reachability_gap`，延后 Phase F 后解决）。

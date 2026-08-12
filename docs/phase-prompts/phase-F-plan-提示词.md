@@ -90,9 +90,10 @@ plan 存 **`docs/superpowers/plans/<date>-phase-F-mvp-done.md`**（日期用 pla
 
 ---
 
-## 提示词③④⑤ —— 待 plan 出 + 预演跑通后按 Phase E 模板整理
+## 提示词③④⑤ —— 预演/手册/复现
 
-Phase F 的 agent 预演执行（提示词③）/ 定稿手册（提示词④）/ teardown+用户复现（提示词⑤），待 Phase F plan（提示词② = 闭环①）定稿 + agent 预演（闭环②）跑通后，按 **`docs/phase-prompts/phase-E-plan-提示词.md`** 的③④⑤ 模板依次整理（结构一致，填 Phase F 范围 + 预演实测教训）。
+- **提示词③（agent 预演执行，闭环②）已整理**：→ `docs/phase-prompts/phase-F-预演-提示词.md`（基于 plan `2026-08-12-phase-F-mvp-done.md` + scope spec，填 Phase F 硬前置 / 9 AC 验收门 / 交付物 / F 特殊点 / 预演-tune 项）。
+- **提示词④（定稿手册，闭环③）/ 提示词⑤（teardown + 用户复现，闭环④⑤）**：待 Phase F 预演（闭环②）跑通后，按 `docs/phase-prompts/phase-E-plan-提示词.md` 的④⑤ 模板整理（结构一致，填 Phase F 预演实测教训）。
 
 **Phase F 预演/复现特殊点（届时填入③④⑤ 时注意）：**
 - **MTTD 用户复现降级**：agent 预演跑全量 5 类×N 取中位；用户复现每类故障抽验 1 次（链路通 + 单次不爆表）——5×N×5 类太久，抽验保可信。

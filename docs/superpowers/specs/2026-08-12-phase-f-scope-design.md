@@ -1,7 +1,7 @@
 # Phase F · GitOps + 收尾 —— 范围收口设计（scope-design）
 
-> **状态**：收口完成，待 writing-plans 转实现计划
-> **日期**：2026-08-12
+> **状态**：收口完成 + 对抗性审查修订（抓出 B-1 github 出网 BLOCKER + 6 项 MINOR，已回改），待用户复核 → writing-plans
+> **日期**：2026-08-12（对抗性审查修订同日）
 > **角色**：本文件是 brainstorming 收口产物（scope-design spec），**不是实现 plan**。plan 由 `superpowers:writing-plans` 基于本文件生成，落 `docs/superpowers/plans/2026-08-12-phase-F-mvp-done.md`。
 > **权威来源**：`docs/superpowers/specs/2026-07-10-phase-breakdown-design.md` Phase F 段（line 128–137）+ §4 AC 映射表 + §6 设计判断；`specs/prd.md` §9/§11/§8.3；`specs/research/06-实际部署决策.md` §3.9（GitOps）/§3.11.2（一期不做）/§6 #16；`docs/14-监控告警系统开发任务拆分方案.md` §3.2/§3.3。
 
@@ -31,7 +31,8 @@ Phase F = **GitOps + 收尾**，是 **MVP done 最终门**。前序 A–E 已把
 | D-2 | **OQ-7 Runbook 公网托管** | 仓库 markdown + raw 直链 `https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/<fault>.md` | AC-US1/US3 要公网独立可达；raw 直链零基建 |
 | D-3 | **Runbook 可见性冲突消解** | 主仓改 public（ArgoCD 免 deploy key；tracked 内容已核验安全） | private 仓 raw URL 匿名 404，违背 AC-US3；public 仓一仓搞定 OQ-1+OQ-7 |
 | D-4 | **OQ-3 值班排班** | 真实排班结构 + 占位号码（`+86-1XX-XXXX-XXXX`）；oncall CM 手动注入、不进 GitOps | 真实号码不入 Git，CM 是凭据型边界（breakdown §F⑧a） |
-| D-5 | **M11 GitOps 范围** | **方案 A**：ArgoCD 只管纯 CR + raw manifest；AM 配置留 kps values（手动 helm upgrade -f） | 最小改动、teardown 干净、AM 配置已在 Git、精准覆盖漂移风险点 |
+| D-5 | **M11 GitOps 范围** | **方案 A**：ArgoCD 只管纯 CR + raw manifest；AM 配置留 kps values（手动 helm upgrade -f） | 最小改动、teardown 干净、AM 配置已在 Git、精准覆盖漂移风险点。**对 06 §3.9 是「软满足」**：rule 全 GitOps，AM 走手动 helm（06 §3.9.4 手动备选兜底，AM 改动少） |
+| D-6 | **B-1 出网缓解（对抗性审查后新增）** | Clash `allow-lan: true` + ArgoCD 注入 `HTTPS_PROXY=http://172.20.0.1:7890`；fallback 本地裸仓镜像 | 实测 github.com 从 kind pod TLS 超时（raw 子域通）；宿主 7890 代理对 github 有效但只绑 127.0.0.1，pod 不可达 |
 
 **核验记录（D-3 支撑）**：tracked 文件敏感扫描——`.mcp.json`/`deploy/.secrets/`/`dingtalk-credentials*` 全 gitignore；`config.yaml.template` 仅 `${VAR}` 占位；`assemble-webhook-config.sh` 从 K8s Secret 读值不入仓；唯一明文是 `adminPassword: "admin123"`（kind 本地开发占位、集群不对公网暴露）。108 tracked 文件无明文凭据。
 
@@ -67,9 +68,17 @@ Phase F = **GitOps + 收尾**，是 **MVP done 最终门**。前序 A–E 已把
 - `kubectl edit PrometheusRule` 绕过 → Runbook 写「事后补 PR」流程。
 - 手动 helm/kubectl 改**必须回写 Git**（否则下次 sync 覆盖）。
 
-**🔥 Phase F 核验点（必查，省预演返工）**：
-- **kind 出网到 github.com:443**：containerd-no-proxy.conf 只管镜像拉取、不管 pod egress。plan 首步 `kubectl -n argocd exec deploy/argocd-server -- curl -sI https://github.com` 实测。不通 → fallback：本地 git 裸仓 / ArgoCD 指本地路径（触发受控偏离④）。
-- ArgoCD polling 3min 延迟实测（改一条 rule → 计时到 sync）+ 手动 `argocd app sync` 命令。
+**🔴 M11 前置硬依赖（B-1，对抗性审查实测确认）——kind pod → github.com 出网**：
+- **实测结论**（busybox pod 定论测）：`raw.githubusercontent.com` ✅ 200 OK（**Runbook raw URL 可达，OQ-7 成立**）；`github.com` 主站 ❌ TLS 超时（DNS/TCP 通，TLS 层 `download timed out` + `bad TLS record len:0`，domain-specific 干扰）。→ ArgoCD `git clone https://github.com/...` 会失败，M11 走不通。
+- **根因**：宿主机 shell 有 `https_proxy=http://127.0.0.1:7890`（+ git 全局 proxy）所以宿主 git 通；pod 没这 env，且 Clash 只绑 `127.0.0.1` → pod 跨 kind 网络到 `172.20.0.1:7890` = `Connection refused`。
+- **选定缓解（D-6）**：① 用户把 Clash 配置设 `allow-lan: true`（一行，Clash 绑 `0.0.0.0:7890`）；② 给 ArgoCD `repo-server` + `application-controller` 注入 `HTTPS_PROXY=http://172.20.0.1:7890`（Deployment env patch，plan 实测 git clone 通）。**贴合 GFW 区生产现实**（生产 ArgoCD 也得配代理）。
+- **fallback**：若 allow-lan 仍不通 → 本地裸仓镜像（宿主 clone 仓 + serve bare over HTTP `0.0.0.0:<port>`，ArgoCD 源改 `http://172.20.0.1:<port>/k8s-monitor.git`），仓里放 `deploy/local-git-mirror.sh`。弱化「真公网 Git」语义 → 进受控偏离④。
+- plan 第一步实测确认缓解生效；用 busybox pod（非 argocd-server——后者 distroless 无 curl/sh）测：`kubectl run t --image=busybox:1.38.0 --restart=Never --command -- sleep 60` → `kubectl exec t -- env https_proxy=http://172.20.0.1:7890 wget --timeout=8 -S -O/dev/null https://github.com`。
+
+**其他核验点（对抗性审查已确认通过）**：
+- ArgoCD polling 3min 延迟实测（改一条 rule → 计时到 sync）+ 手动 `argocd app sync`。
+- **版本锁 87.2.1 无风险**：方案 A 用 plain-manifest directory sync（非 helm chart source）→ 不存在 ArgoCD 拉错 chart 版本（仍守 memory `project_helm_upgrade_version_lock`）。
+- **execute_alerts:false 无风险**：M11 只动 PrometheusRule + webhook raw manifest，不碰 Grafana 配置（kps values）→ 不会误碰开关。
 
 ### 3.2 M13 SmsProvider NoOp（最小）
 
@@ -78,19 +87,22 @@ Phase F = **GitOps + 收尾**，是 **MVP done 最终门**。前序 A–E 已把
 ### 3.3 M14b Runbook + 值班手册
 
 - **Runbook 内容**：`docs/runbook/<fault>.md`，覆盖 5 类故障（not-ready / crashloop / oom / pod-pending / control-plane）+ 元监控 1 篇。每篇：症状 / 影响 / 诊断 kubectl / 止血 / 恢复 / 升级路径。
+- **raw URL UX trade-off（知情决策）**：`raw.githubusercontent.com` 返 `Content-Type: text/plain` → 手机钉钉点开是**裸 markdown 源码**（`#`/`**`/`|` 字面符号，可读但不渲染）。满足 AC-US3「自包含、可读处置手册」语义；OQ-7 已选 raw 直链（知情接受），Runbook 写作尽量少用复杂表格/嵌套语法以保可读。
 - **stub → 真 URL**：M14a（Phase C）在某处放了 stub URL（rule 注解 or webhook 模板——**plan 前需定位**，核验点）。M14b 在 PrometheusRule 注解加 `runbook_url: https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/<fault>.md` + webhook 模板渲染。
 - **oncall CM 真实结构 + 占位**（D-4）：`monitoring/oncall` CM 补真实排班结构（主/备值班、轮班周期、升级路径）+ 手机/钉钉号占位。CM 不进 GitOps（手动注入）。值班手册落 `docs/`。
 
 ### 3.4 M15 全量演练 + MTTD + verify-all 对齐（北极星在此达标）
 
-**MTTD 全量统计（L2 非 RED）**：扩展 `deploy/verify/measure-mttd.sh`（Phase C 单次骨架）成批量模式——4 类故障 × N=5 次：inject → 等 firing → 记 T0/T_detect → cleanup。每类出**中位 MTTD + 额外开销（MTTD − for）≤60s + 送达率**。
+**MTTD 全量统计（L2 非 RED）**：扩展 `deploy/verify/measure-mttd.sh`（Phase C 单次骨架）成批量模式——4 类故障 × N=5 次：inject → 等 firing → 记 T0/T_detect → cleanup。每类出**中位 MTTD + max MTTD + 额外开销（MTTD − for）≤60s + 送达率**。
 
-| 类别 | 规则 | for | MTTD 目标 |
+**N=5 理由**：PRD §11 只说「注入 N 次」未规定 N（核验确认）；选 N=5——北极星判据是「额外开销 ≤60s 阈值」非统计显著性，5 样本足以抗单次抖动。**报中位 + max 双指标**：中位达标 + **max 也不爆表**（max 爆表 = 链路有间歇故障，不可只看中位）。
+
+| 类别 | 规则 | for（实测） | MTTD 目标 |
 |---|---|---|---|
 | not-ready | KubeWorkerNodeNotReady | 5m | ≤6min |
 | crashloop | KubePodCrashLooping | 10m | ≤11min |
-| oom | KubeContainerOOMKilled | plan 核 | for+1min |
-| pod-pending | KubePodPending | plan 核 | for+1min |
+| oom | KubeContainerOOMKilled | 1m（实测，超快） | ≤2min |
+| pod-pending | KubePodPending | 10m（实测） | ≤11min |
 
 **送达率 100% 是硬门**：任一次注入没收到卡片 = MTTD=∞ = 直接 FAIL。全量约 2–3h（crashloop 5×11m 就 55m）——长 agent 预演；**用户复现按降级每类抽验 1 次**。
 
@@ -108,7 +120,7 @@ agent 预演技术门 = **9 AC 全过**：
 
 | AC | 在 F 验到什么 |
 |---|---|
-| **AC-US1-01** | 完整 MTTD 统计（not-ready ≤6min）+ 真公网 Runbook |
+| **AC-US1-01** | 完整 MTTD 统计（not-ready ≤6min）+ 真公网 Runbook。**@值班签收语义**：dev 验「ActionCard 的 @ 字段渲染正确」（oncall CM 占位号码也算）；真人 @ 触达（钉钉 @ 需真实手机号匹配账号）留生产前注入真实号码后验 |
 | **AC-US3-01** | 真公网 raw URL curl 返 200、不依赖 Grafana |
 | **AC-NFR-01**（北极星） | 4 类 ×5 取中位达标（MTTD ≤ for+1min）+ **送达率 100%**；控制面降级「规则在位」 |
 | **AC-NFR-02** | 收尾复核收敛率 <1:1（B 主验） |
@@ -121,7 +133,7 @@ agent 预演技术门 = **9 AC 全过**：
 
 ## 5. teardown（breakdown §F⑤，F 终态不清回）
 
-- **新建型 delete**：2 个 ArgoCD Application CR、SmsProvider NoOp Deployment、批量 MTTD 脚本、`silence.sh`。
+- **新建型 delete**：2 个 ArgoCD Application CR、**ArgoCD deployer RBAC**（monitoring ns RoleBinding 赋 argocd app-controller，让它能 sync 进 ns）、SmsProvider NoOp Deployment、批量 MTTD 脚本、`silence.sh`、**ArgoCD HTTPS_PROXY env patch**（回滚 repo-server/application-controller 的代理 env）。
 - **修改型 apply 回前序**：PrometheusRule 的 `runbook_url` 注解、baseline.txt、oncall CM 占位、M12 AM/ArgoCD Ingress。
 - **凭据型保留**：oncall CM 占位值（public repo 免 Git secret）。
 - 🔥 **F 完成后集群 = MVP 完整态，不清回**；teardown 仅服务「用户复现 F」前还原。
@@ -130,7 +142,7 @@ agent 预演技术门 = **9 AC 全过**：
 
 ## 6. 降级（breakdown §F⑦ + docs/14 §3.3）
 
-- **MTTD 统计**：agent 预演全量 4 类 ×5 取中位；**用户复现每类抽验 1 次**（链路通 + 单次不爆表）。
+- **MTTD 统计**：agent 预演全量 4 类 ×5 取中位（+ max 不爆表）；**用户复现每类抽验 1 次**（链路通 + 单次不爆表）。
 - **Watchdog 1h 心跳**：Phase D 已验，F 仅复核「独立群持续」，不重跑 2h 周期。
 - **control-plane**：规则在位 + 评估无错验证（非 MTTD）。
 
@@ -143,13 +155,14 @@ agent 预演技术门 = **9 AC 全过**：
 | 1 | **control-plane MTTD kind 不可测** | 4 类统计达标 + 控制面规则在位验证，真 firing/MTTD 留生产割接（3 master） | inject-fault.sh 单 master 安全拒绝（停 apiserver/etcd 瘫集群+Prom 自身）；类比 breakdown §6 判断 3 |
 | 2 | **#24 reachability 盲区** | 已知 limitation 非 bug；F 不覆盖网络路径故障；延后 F 后（blackbox 二期） | Phase E 实测：ArgoCD NodePort wedge 期间零告警/dashboard 全绿 |
 | 3 | **F 终态不清回** | 集群留 MVP 完整态 | F 是 MVP done 最终门 |
-| 4 | **（条件触发）kind→github 出网不通** | 本地 git 裸仓 / 本地路径 fallback（实测不通才登记） | containerd-no-proxy.conf 不管 pod egress，未验 |
+| 4 | **kind→github.com 出网（已确认触发，对抗性审查实测）** | M11 前置硬依赖：Clash `allow-lan:true` + ArgoCD `HTTPS_PROXY=http://172.20.0.1:7890`（D-6）；若仍不通降级本地裸仓镜像 | 实测：raw.githubusercontent 通、github.com 主站 TLS 超时；Clash 只绑 127.0.0.1，pod 跨 kind 网络不可达 |
 
 ---
 
 ## 8. 闭环⓪前置（用户动作 + 最终核验）
 
-- **主仓改 public**：用户跑 `gh repo edit jy2382726/k8s-monitor --visibility public`（改前 agent 跑最终敏感扫描，确认无明文凭据入仓）。public 后 ArgoCD 免 deploy key。
+- **主仓改 public**：用户跑 `gh repo edit jy2382726/k8s-monitor --visibility public`（改前 agent 跑最终敏感扫描，确认无明文凭据入仓）。public 后 ArgoCD 免 deploy key。⚠️ **改 public 会暴露全部设计文档**（PRD/specs/phase 预演日志/superpowers 设计——无凭据但含项目叙事）；用户已选 public（D-3，知情）。若在意隐私可回退为「单独 public Runbook 仓」。
+- **Clash `allow-lan: true`**（D-6）：用户在 Clash 配置置 `allow-lan: true`（一行），让 pod 经 `172.20.0.1:7890` 走代理拉 github。改后 plan 第一步实测 git clone 通；不通则降级本地裸仓（受控偏离④）。
 - **oncall CM 占位号码手动注入**（CM 不进 GitOps）。
 - **Runbook 真实处置内容**：agent 起草 + 用户审（故障处置知识）。
 
@@ -159,7 +172,7 @@ agent 预演技术门 = **9 AC 全过**：
 
 - **L0**：verify-all/baseline 对齐 06（RED-first：补缺检查项 → RED → 实现 → GREEN）。
 - **L1**：ArgoCD sync 断言 / Runbook URL 200 断言 / silence 生效断言 / M12 Ingress 可达断言。
-- **L2**：MTTD 全量统计（非 RED，测量：中位 + 送达率）。
+- **L2**：MTTD 全量统计（非 RED，测量：中位 + max + 送达率）。
 
 ---
 

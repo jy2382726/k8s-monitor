@@ -90,13 +90,13 @@ plan 存 **`docs/superpowers/plans/<date>-phase-F-mvp-done.md`**（日期用 pla
 
 ---
 
-## 提示词③ —— agent 预演执行（Phase F 闭环②，启动 Phase F 预演）
+# 提示词③ —— agent 预演执行（Phase F 闭环②，启动 Phase F 预演）
 
 > 这是**预演**——照 plan 真实部署一遍。plan = `docs/superpowers/plans/2026-08-12-phase-F-mvp-done.md`（v1.1，11 Task，D-6 已转本地裸仓）。配套 scope spec = `docs/superpowers/specs/2026-08-12-phase-f-scope-design.md`（D-1~D-6 + 受控偏离①-④，对抗性审查修订版）。
 >
 > ⚠️ **预演前闭环⓰硬用户前置 = 主仓改 public**（`gh repo edit jy2382726/k8s-monitor --visibility public`，Runbook raw URL 用；改前已扫 tracked 内容安全）。**D-6 已改走本地裸仓（弃 Clash allow-lan 代理路径——撞 IPv6-only 绑定 + 防火墙兔子洞）**，agent 在 Task 0 起 `deploy/local-git-mirror.sh`（host clone bare + git daemon `git://`）。**预演 agent 先实测主仓 public 到位 + Task 0 裸仓可达再开工**（见下「闭环⓰ 先做」）。
 
-### 闭环⓰ 先做（硬前置核验，不通过则停下报用户）
+## 闭环⓰ 先做（硬前置核验，不通过则停下报用户）
 
 预演 agent 进 worktree 前先跑这套核验，任一不过则**报「闭环⓰ 未就绪，请用户做完 X 后重启预演」并停下，不进 Task 0 之后**：
 
@@ -108,11 +108,11 @@ plan 存 **`docs/superpowers/plans/<date>-phase-F-mvp-done.md`**（日期用 pla
 5. **存 start-state**（teardown 还原 diff 基线，docs/14 §3.3 line 138）：
    `kubectl get prometheusrules,alertmanagerconfigs,deployments,secrets,configmaps,applications.argoproj.io,ingress -n monitoring -o name > docs/phase-manuals/phase-F-start-state.txt`（补 argocd ns：`-n argocd`）。
 
-### 建隔离 worktree（先做）
+## 建隔离 worktree（先做）
 
 用 `superpowers:using-git-worktrees` 建隔离 worktree（Phase D/E 惯例，预演改动隔离，不污染 main 工作区）。worktree 名建议 `worktree-phase-F-mvp-done`。
 
-### 执行 plan（subagent-driven-development）
+## 执行 plan（subagent-driven-development）
 
 用 `superpowers:subagent-driven-development` skill 执行 `docs/superpowers/plans/2026-08-12-phase-F-mvp-done.md`。**每个 Task 派 fresh subagent + 两段 review**（review 1：代码/部署正确性；review 2：验收门推进）。Task 顺序固定（依赖链）：
 
@@ -127,7 +127,7 @@ plan 存 **`docs/superpowers/plans/<date>-phase-F-mvp-done.md`**（日期用 pla
 - **Task 10**：recover.sh 三场景自愈（AC-NFR-03）。
 - **Task 11**：横切 M12 Alertmanager + ArgoCD Ingress（L1）。
 
-### Phase F 预演验收门（plan「验收门」节，MVP done 最终门）
+## Phase F 预演验收门（plan「验收门」节，MVP done 最终门）
 
 跑完 Task 0-11 后逐条验，**全过 = agent 预演技术门通过**：
 
@@ -142,14 +142,14 @@ plan 存 **`docs/superpowers/plans/<date>-phase-F-mvp-done.md`**（日期用 pla
 
 + `./deploy/verify/verify-all.sh` 全 [PASS]（项数 ≥ Phase E 22 + 06 对齐新增）。
 
-### 预演交付物（缺一不可，少任一项 = 预演失败）
+## 预演交付物（缺一不可，少任一项 = 预演失败）
 
 1. **部署跑通验收门**（上表全过）。
 2. **操作手册草稿**（plan 所有 task 完成后作为**预演收尾步骤**产出，非 plan task；存 `docs/phase-manuals/phase-F-操作手册-草稿.md`）。从 plan + 实际执行日志提炼，用户操作视角（非 agent 视角）。
 3. **预演日志实时落盘**（`docs/phase-manuals/phase-F-预演日志.md`）：每步实际输出 / 与 plan 的偏差 / 踩坑及解法 / Task 改了哪些资源+改前值（teardown 修改型回滚要用）。**换会话不丢**——每完成一个 Task 就 append 落盘。
    - ⚠️ **脱敏**：`kubectl get -o yaml secret/configmap` 输出的 data 字段值一律替换 `<REDACTED>`（日志进 Git，防泄密，CLAUDE.md §10）。
 
-### Phase F 预演特殊点（区别于 A-E，踩到按此处理）
+## Phase F 预演特殊点（区别于 A-E，踩到按此处理）
 
 1. **B-1 D-6 本地裸仓（选定，非 fallback）**：`deploy/local-git-mirror.sh` 起 host bare clone（via 127.0.0.1:7890）+ `git daemon` serve `git://172.20.0.1/k8s-monitor.git`（PoC 三步全通）。3 个 Application `source.repoURL` = `git://172.20.0.1/k8s-monitor.git`。**代理路径（Clash allow-lan）已弃**——撞 IPv6-only 绑定 + `.wslconfig firewall=true` 兔子洞，勿再试。弱化「真公网 Git」语义（Runbook 仍走 github raw 真公网）→ 受控偏离④（scope spec §7④）。若 ArgoCD 拒 `git://` → fallback `git http-backend` smart HTTP。
 2. **MTTD 全量 ~2.5h 长跑**（Task 9）：not-ready 5×6min + crashloop 5×11min + oom 5×2min + pod-pending 5×11min + cleanup。agent 预演跑全量；送达率任一类 <100% = 北极星 FAIL，**停下 systematic-debugging**（丢失 = MTTD=∞ = 直接判失败，不取中位）。**用户复现按降级每类抽验 1 次**（闭环⑤，非预演）。
@@ -159,7 +159,7 @@ plan 存 **`docs/superpowers/plans/<date>-phase-F-mvp-done.md`**（日期用 pla
 6. **I-1 生产前必修，不阻塞 F 验收**（memory `project_phase_e_preview_done`）：dashboard 节点 Ready 率假绿（`cluster:nodes_ready:ratio`）。F 验收门不卡 I-1，但记进手册「生产割接前必修」清单。
 7. **control-plane MTTD 不可测**（受控偏离①）：kind 单 master，`inject-fault.sh control-plane` 安全拒绝。Task 9 只跑 4 类（not-ready/crashloop/oom/pod-pending）+ control-plane 单独验「规则在位 + 评估无错」（Task 9 Step 3），真 firing/MTTD 留生产割接（3 master）。**勿尝试在 kind 停 apiserver/etcd**（瘫集群+Prom 自身）。
 
-### 预演-tune 项（plan v1.1 内联标注，预演实测调整 + 回写 plan 修订记录）
+## 预演-tune 项（plan v1.1 内联标注，预演实测调整 + 回写 plan 修订记录）
 
 plan 标注了若干 plan 阶段不可知、需预演实测调的点，预演实测后回写 plan「修订记录」+ 升版本号：
 
@@ -173,7 +173,7 @@ plan 标注了若干 plan 阶段不可知、需预演实测调的点，预演实
 - **Task 9 Step 1**：measure-mttd.sh 单次输出行格式（`MTTD（单次, <alert>）= <n>s`）解析；auto-silence 背景 + sleep 估值（for+group_wait+余量）调。
 - **teardown / Task 2 Step 6**：ArgoCD finalizer 删 Application 时是否会连带删它管的 4 个 PrometheusRule + webhook（若是，teardown 还原需重新手 apply 回前序）。
 
-### 预演成功 ≠ 阶段完成
+## 预演成功 ≠ 阶段完成
 
 预演跑通验收门只证明**手册可信**。阶段完成还要：提示词④（定稿手册，闭环③）→ 提示词⑤（teardown 还原 + 用户照手册复现，闭环④⑤）。**阶段完成 = 用户复现通过，不是 agent 预演通过**（docs/14 §3.3 line 158）。
 
@@ -181,6 +181,6 @@ plan 标注了若干 plan 阶段不可知、需预演实测调的点，预演实
 
 ---
 
-## 提示词④⑤ —— 待预演跑通后整理
+# 提示词④⑤ —— 待预演跑通后整理
 
 - **提示词④（定稿手册，闭环③）/ 提示词⑤（teardown + 用户复现，闭环④⑤）**：待 Phase F 预演（闭环②，即上文提示词③）跑通后，按 `docs/phase-prompts/phase-E-plan-提示词.md` 的④⑤ 模板整理（结构一致，填 Phase F 预演实测教训）。

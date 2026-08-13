@@ -13,7 +13,7 @@
 
 # 提示词③ —— agent 预演执行（Phase F 闭环②，启动 Phase F 预演）
 
-> 这是**预演**——照 plan 真实部署一遍。plan = `docs/superpowers/plans/2026-08-12-phase-F-mvp-done.md`（v1.0，11 Task）。配套 scope spec = `docs/superpowers/specs/2026-08-12-phase-f-scope-design.md`（D-1~D-6 + 受控偏离①-④，对抗性审查修订版）。
+> 这是**预演**——照 plan 真实部署一遍。plan = `docs/superpowers/plans/2026-08-12-phase-F-mvp-done.md`（v1.1，11 Task，D-6 已转本地裸仓）。配套 scope spec = `docs/superpowers/specs/2026-08-12-phase-f-scope-design.md`（D-1~D-6 + 受控偏离①-④，对抗性审查修订版）。
 >
 > ⚠️ **预演前闭环⓰硬用户前置 = 主仓改 public**（`gh repo edit jy2382726/k8s-monitor --visibility public`，Runbook raw URL 用；改前已扫 tracked 内容安全）。**D-6 已改走本地裸仓（弃 Clash allow-lan 代理路径——撞 IPv6-only 绑定 + 防火墙兔子洞）**，agent 在 Task 0 起 `deploy/local-git-mirror.sh`（host clone bare + git daemon `git://`）。**预演 agent 先实测主仓 public 到位 + Task 0 裸仓可达再开工**（见下「闭环⓰ 先做」）。
 
@@ -80,7 +80,7 @@
 6. **I-1 生产前必修，不阻塞 F 验收**（memory `project_phase_e_preview_done`）：dashboard 节点 Ready 率假绿（`cluster:nodes_ready:ratio`）。F 验收门不卡 I-1，但记进手册「生产割接前必修」清单。
 7. **control-plane MTTD 不可测**（受控偏离①）：kind 单 master，`inject-fault.sh control-plane` 安全拒绝。Task 9 只跑 4 类（not-ready/crashloop/oom/pod-pending）+ control-plane 单独验「规则在位 + 评估无错」（Task 9 Step 3），真 firing/MTTD 留生产割接（3 master）。**勿尝试在 kind 停 apiserver/etcd**（瘫集群+Prom 自身）。
 
-## 预演-tune 项（plan v1.0 内联标注，预演实测调整 + 回写 plan 修订记录）
+## 预演-tune 项（plan v1.1 内联标注，预演实测调整 + 回写 plan 修订记录）
 
 plan 标注了若干 plan 阶段不可知、需预演实测调的点，预演实测后回写 plan「修订记录」+ 升版本号：
 

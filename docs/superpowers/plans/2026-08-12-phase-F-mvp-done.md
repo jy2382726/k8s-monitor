@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **版本**：v1.0（基于对抗性审查修订版 scope spec `2026-08-12-phase-f-scope-design.md`，含 B-1 BLOCKER 缓解）。agent 预演若发现新踩坑，按 Phase E 惯例追加「修订记录」并升版本号。
+> **版本**：v1.1（**D-6 弃代理路径、转本地裸仓镜像**——实测代理撞 Clash IPv6-only 绑定 + `.wslconfig firewall=true` 兔子洞；裸仓 PoC 三步全通：host bare clone ✅ / pod→172.20.0.1 HTTP 可达 ✅。Task 0 重写为裸仓、Task 1 删 HTTPS_PROXY、3 Application repoURL 改 `git://172.20.0.1/k8s-monitor.git`）。v1.0 见修订记录。agent 预演若发现新踩坑，追加「修订记录」并升版本号。
 
 **Goal（目标）**：把前序手 apply 的部署产物 **GitOps 化**（ArgoCD 管 PrometheusRule + webhook-dingtalk + sms-provider NoOp），补真实公网 Runbook + 值班手册，跑 **AC-NFR-01 北极星全量统计**（4 类故障 ×5 取中位+max + 送达率 100%），verify-all/baseline 对齐 06 验收项，recover.sh 三场景自愈。**验收门 = 9 AC 全过 + verify-all 全绿 + recover 三场景恢复 = MVP done 最终门**。
 
-**Architecture（架构）**：① **M11 方案 A**：ArgoCD 只管纯 CR + raw manifest（3 个 Application：`monitoring-rules` / `webhook-dingtalk` / `sms-provider`），AM 配置留 kps values 手动 `helm upgrade -f`（对 06 §3.9 软满足，06 §3.9.4 兜底）；紧急操作走 AM API silence（不破坏 GitOps）+ kubectl edit 事后补 PR。② **B-1 前置硬依赖**：kind pod → `github.com` TLS 超时（raw 子域通），缓解 = Clash `allow-lan:true` + ArgoCD 注入 `HTTPS_PROXY=http://172.20.0.1:7890`；fallback 本地裸仓镜像（受控偏离④）。③ **M14b**：`docs/runbook/` 真实公网 markdown（`raw.githubusercontent.com` raw 直链，OQ-7）+ PrometheusRule 注解 `runbook_url` + webhook 模板渲染 + oncall CM 真实排班结构（占位号码，CM 不进 GitOps）。④ **M15**：扩展 `measure-mttd.sh` 成批量（4 类 ×5），T0=inject-fault T0_LOG / T_detect=webhook 日志 `/dingtalk/<target>/send resp_status=200`（Phase C 校正法，AM 0.33.0 不打 dispatch）；verify-all RED-first 补 06 对齐项；recover.sh 三场景。
+**Architecture（架构）**：① **M11 方案 A**：ArgoCD 只管纯 CR + raw manifest（3 个 Application：`monitoring-rules` / `webhook-dingtalk` / `sms-provider`），AM 配置留 kps values 手动 `helm upgrade -f`（对 06 §3.9 软满足，06 §3.9.4 兜底）；紧急操作走 AM API silence（不破坏 GitOps）+ kubectl edit 事后补 PR。② **B-1 出网（D-6 本地裸仓镜像，实测选定）**：kind pod → `github.com` TLS 超时（raw 子域通）→ 宿主 clone bare（经 `127.0.0.1:7890`）+ `git daemon` serve `git://` → ArgoCD 源 `git://172.20.0.1/k8s-monitor.git`（PoC 三步全通）。弃代理路径（Clash allow-lan 撞 IPv6-only 绑定 + 防火墙兔子洞）。③ **M14b**：`docs/runbook/` 真实公网 markdown（`raw.githubusercontent.com` raw 直链，OQ-7，需主仓 public）+ PrometheusRule 注解 `runbook_url` + webhook 模板渲染 + oncall CM 真实排班结构（占位号码，CM 不进 GitOps）。④ **M15**：扩展 `measure-mttd.sh` 成批量（4 类 ×5），T0=inject-fault T0_LOG / T_detect=webhook 日志 `/dingtalk/<target>/send resp_status=200`（Phase C 校正法，AM 0.33.0 不打 dispatch）；verify-all RED-first 补 06 对齐项；recover.sh 三场景。
 
 **Tech Stack**：ArgoCD（chart 10.1.2 / app v3.4.4，Application CR `argoproj.io/v1alpha1`，polling 3min）/ PrometheusRule CR / webhook-dingtalk（timonwong v2.1.0，裸 Deployment）/ Prometheus `/api/v1/query` + `/api/v1/rules` / Alertmanager `/api/v2/silences` / helm（**锁 `--version 87.2.1`**）/ busybox:1.38.0（已预灌，测 egress）/ Grafana 13.1.0。context = `kind-k8s-monitor-dev`。
 
@@ -26,7 +26,7 @@
 - **webhook-dingtalk**：裸 Deployment（`last-applied-configuration` 注解，非 helm），manifest 在 `deploy/components/webhook-dingtalk/`。挂载 config Secret（`webhook-dingtalk-config`，assemble-webhook-config.sh 渲染，凭据型）+ templates ConfigMap（`webhook-dingtalk-templates`）。✅
 - **oncall ConfigMap**：`monitoring/oncall` 在（31d），C 期建。M14b 补真实排班结构。✅
 - **execute_alerts = false**（Phase E 设）。✅
-- **🔴 B-1 实测（busybox pod 定论）**：`raw.githubusercontent.com` ✅ 200 OK；`github.com` ❌ TLS 超时（DNS/TCP 通，TLS 层断）。宿主 shell 有 `https_proxy=http://127.0.0.1:7890`（+ git 全局 proxy）所以宿主 git 通；pod 没这 env，Clash 只绑 `127.0.0.1` → pod 到 `172.20.0.1:7890` = `Connection refused`。→ **D-6 缓解：Clash allow-lan + ArgoCD HTTPS_PROXY**。
+- **🔴 B-1 实测（busybox pod 定论 + PoC）**：`raw.githubusercontent.com` ✅ 200 OK（Runbook 可达）；`github.com` ❌ TLS 超时（DNS/TCP 通，TLS 层断）。宿主 shell 有 `https_proxy=http://127.0.0.1:7890`（+ git 全局 proxy）所以宿主 git 通；pod 没这 env。**代理路径已弃**：Clash allow-lan 后只绑 IPv6 `::`、IPv4 192.168.0.3:7890 `Connection refused`，再修撞 `.wslconfig firewall=true`。**→ D-6 选定本地裸仓镜像**（PoC 三步全通：host bare clone ✅、pod→172.20.0.1 HTTP 可达 ✅、git daemon 9418 同路径）。ArgoCD 源 `git://172.20.0.1/k8s-monitor.git`，不依赖 Clash/防火墙。
 - **AM 活跃告警 = 0**（amtool 实测，当前无背景噪声）；但 kube-proxy fd crashloop 间歇（memory `project_am_notification_test_pitfalls`）→ MTTD batch 仍需 auto-silence 背景 + ts≥T0 过滤。
 - **for 值实测**（`prometheusrule-core.yaml`）：KubeWorkerNodeNotReady `5m` / KubePodCrashLooping `10m` / KubeContainerOOMKilled `1m` / KubePodPending `10m`。
 - **measure-mttd.sh**：Phase C 单次骨架在（T0=T0_LOG 末行 / T_detect=webhook 日志最早 resp_status=200）。
@@ -35,9 +35,9 @@
 
 ## 决策声明（实测驱动，承 scope spec D-1~D-6）
 
-1. **D-1/D-3 主仓改 public = OQ-1+OQ-7 同源**：`github.com/jy2382726/k8s-monitor` 改 public。ArgoCD 免 deploy key（public read）；Runbook raw URL 匿名可达（AC-US3）。tracked 内容已核验安全（凭据全 gitignore，唯一明文 `adminPassword:admin123` 是 kind 占位）。⚠️ 改 public 暴露全部设计文档（PRD/specs/预演日志）——用户知情接受（D-3）。
+1. **D-1/D-3 主仓改 public = Runbook 公网（OQ-7）**：`github.com/jy2382726/k8s-monitor` 改 public，**目的 = Runbook raw URL 匿名可达（AC-US3）**。**ArgoCD 已改走本地裸仓（D-6，Task 0），不读 github**——所以 public 纯为 Runbook。tracked 内容已核验安全（凭据全 gitignore，唯一明文 `adminPassword:admin123` 是 kind 占位）。⚠️ 改 public 暴露全部设计文档（PRD/specs/预演日志）——用户知情接受（D-3）。
 2. **D-5 M11 方案 A（纯 CR + raw manifest）**：3 个 ArgoCD Application；AM 配置留 kps values 手动 helm（对 06 §3.9 软满足：rule 全 GitOps，AM 走手动，06 §3.9.4 兜底）。
-3. **D-6 B-1 缓解 = Clash allow-lan + ArgoCD HTTPS_PROXY**（首选）；fallback 本地裸仓镜像（受控偏离④）。plan Task 0 实测确认。
+3. **D-6 B-1 缓解 = 本地裸仓镜像**（实测选定，PoC 三步全通）：宿主 `git clone --bare`（经 `127.0.0.1:7890`）+ `git daemon` `git://172.20.0.1/k8s-monitor.git`。**代理路径（Clash allow-lan + ArgoCD HTTPS_PROXY）已弃**——撞 IPv6-only 绑定 + `.wslconfig firewall=true` 兔子洞。弱化「真公网 Git」语义（Runbook 仍走 github raw 真公网）→ 受控偏离④。
 4. **D-4 oncall 真实结构 + 占位号码**：CM 不进 GitOps（手动注入）。
 5. **受控偏离①-④**（scope spec §7）：control-plane MTTD kind 不可测（4 类统计+控制面规则在位，真 firing 留生产）/ #24 reachability 盲区（延后 F 后）/ F 终态不清回 / github 出网（已确认触发，D-6 缓解）。
 6. **AC-US1-01 @值班签收语义**：dev 验「@字段渲染正确」（占位号码也算）；真人 @ 触达留生产（真实号码注入 oncall CM 后）。
@@ -55,7 +55,7 @@
 | `deploy/argocd/argocd-deployer-rbac.yaml` | 新建 | monitoring ns RoleBinding（argocd app-controller → sync 进 ns）|
 | `deploy/components/sms-provider/manifest.yaml` | 新建 | SmsProvider NoOp Deployment + Service（M13）|
 | `deploy/components/sms-provider/README.md` | 新建 | SmsProvider 接口契约（二期插拔位置，M13）|
-| `deploy/argocd/argocd-proxy-env.patch.yaml` | 新建 | repo-server/application-controller HTTPS_PROXY env patch（D-6）|
+| `deploy/local-git-mirror.sh` | 新建 | D-6 本地裸仓镜像：host clone bare + git daemon `git://`（Task 0，B-1 缓解，deploy/ 根无需白名单）|
 | `deploy/verify/assert-argocd-sync.sh` | 新建（加白名单） | L1：Application synced healthy + 规则加载 |
 | `deploy/verify/silence.sh` | 新建（加白名单） | 紧急操作：AM API silence 增/查/删（M11）|
 | `deploy/verify/assert-silence.sh` | 新建（加白名单） | L1：silence 生效断言 |
@@ -68,20 +68,19 @@
 | `deploy/components/webhook-dingtalk/templates-*.yaml`（或 manifest） | 修改 | webhook 模板渲染 runbook_url（定位后，M14b）|
 | `deploy/verify/verify-all.sh` | 修改 | 加 06 对齐检查项（M15 L0 RED-first）|
 | `deploy/verify/baseline.txt` | 修改 | 同步新检查项基线 |
-| `.gitignore` | 修改 | 加 7 个 verify 脚本白名单 |
-| `deploy/local-git-mirror.sh` | 新建（fallback 才用） | 本地裸仓镜像（受控偏离④ fallback，默认不建）|
+| `.gitignore` | 修改 | 加 verify 脚本白名单（assert-argocd-sync/silence/assert-silence/measure-mttd-batch/assert-runbook-url/assert-m12-ingress）|
 
 ---
 
-## Task 0：B-1 前置硬依赖 —— Clash allow-lan + ArgoCD 出网缓解（🔴 BLOCKER gate）
+## Task 0：B-1 出网缓解 —— D-6 本地裸仓镜像（🔴 M11 前置，实测三步全通）
 
-> **M11 一切 task 的前置**。通不过则 M11 不可做，降级受控偏离④（本地裸仓）。
+> **M11 一切 task 的前置**。github.com 从 kind pod TLS 超时（raw 子域通）→ 用本地裸仓镜像绕开：宿主 clone bare（宿主经 `127.0.0.1:7890` 代理能拉 github）→ `git daemon` serve `git://` → ArgoCD 源指 `git://172.20.0.1/k8s-monitor.git`。PoC 实测：宿主 bare clone ✅、pod→172.20.0.1 HTTP 可达 ✅（git daemon 9418 同路径，预演 Step 3 验）。**不依赖 Clash allow-lan / 不碰 Windows 防火墙 / 不需 ArgoCD HTTPS_PROXY**。代理路径（Clash allow-lan）撞 IPv6-only 绑定 + 防火墙兔子洞，已弃。
 
-**Files:** 无文件改动（用户动作 + 实测核验）
+**Files:** Create `deploy/local-git-mirror.sh`
 
-- [ ] **Step 1：主仓改 public（用户动作）**
+- [ ] **Step 1：主仓改 public（用户动作，Runbook 用）**
 
-用户先设 Clash `allow-lan: true`（Clash/mihomo/clash-verge 配置 `allow-lan: true` 一行，重启 Clash 生效 → 7890 绑 `0.0.0.0`）。然后：
+> 目的 = Runbook raw URL 公网匿名可达（AC-US3，`raw.githubusercontent.com` 要 public）。ArgoCD 已改走本地裸仓（Step 2），不依赖 public；host clone bare 上游宿主 git 有缓存凭据，private 也能拉。改 public 纯为 Runbook。
 
 ```bash
 # 改 public 前 agent 跑最终敏感扫描（确认无明文凭据）
@@ -92,52 +91,73 @@ git ls-files | xargs grep -lIiE 'api[_-]?key|access[_-]?token|password|secret' 2
 # 用户执行（agent 不代跑——outward-facing 不可逆操作）：
 gh repo edit jy2382726/k8s-monitor --visibility public
 ```
-Expected: `[PASS] 无明文凭据...` + repo visibility = public（`gh repo view --json visibility` 确认）。
+Expected: `[PASS] 无明文凭据...` + `gh repo view --json visibility` 显示 `"PUBLIC"`。
 
-- [ ] **Step 2：实测 pod 经代理可达 github（D-6 成立与否的判据）**
+- [ ] **Step 2：写 + 跑 local-git-mirror.sh（D-6 选定缓解）**
 
-```bash
-kubectl run b1test --image=busybox:1.38.0 --restart=Never --command -- sleep 90
-kubectl wait --for=condition=ready pod/b1test --timeout=60s
-# 经 172.20.0.1:7890 代理测 github.com（D-6 首选缓解）
-kubectl exec b1test -- sh -c \
-  'https_proxy=http://172.20.0.1:7890 wget --timeout=8 -S -O/dev/null https://github.com 2>&1 | head -4'
-kubectl delete pod b1test --ignore-not-found
-```
-Expected（D-6 成立）: `Connecting to 172.20.0.1:7890` → `HTTP/1.1 200 Connection established` → `HTTP/2 200`（或 `HTTP/... 301/302` 重定向，均算通）。
-
-**分支**：
-- 若上方 **通了** → D-6 首选缓解成立，进 Task 1（ArgoCD 注入 HTTPS_PROXY）。
-- 若 **超时/refused** → D-6 不成立，降级受控偏离④：执行 Task 0-fallback（本地裸仓），后续 Application 的 `source.repoURL` 改 `http://172.20.0.1:<port>/k8s-monitor.git`。
-
-- [ ] **Step 3（仅 D-6 不通时）：Task 0-fallback 本地裸仓镜像**
-
-建 `deploy/local-git-mirror.sh`（fallback 才加，默认不建）：
+Create `deploy/local-git-mirror.sh`：
 
 ```bash
 #!/usr/bin/env bash
-# 受控偏离④ fallback：宿主 clone 目标仓（宿主有 127.0.0.1:7890 代理）→ bare 仓 →
-# git update-server-info → http serve on 0.0.0.0:<port>，ArgoCD 源指 http://172.20.0.1:<port>/k8s-monitor.git
+# D-6（B-1 出网缓解，选定方案）：本地裸仓镜像。
+# github.com 从 kind pod TLS 超时（raw 子域通）→ 宿主 clone bare（宿主经 127.0.0.1:7890 代理能拉）
+# → git daemon serve git://（标准 git 协议，ArgoCD go-git 支持）→ ArgoCD 源指 git://172.20.0.1/k8s-monitor.git。
+# PoC 实测：宿主 bare clone ✅、pod→172.20.0.1 HTTP 可达 ✅（git://9418 同网络路径）。
 set -euo pipefail
-PORT="${1:-8088}"
-MIRROR=/srv/git/k8s-monitor.git
-mkdir -p "$(dirname "$MIRROR")"
-[ -d "$MIRROR" ] || git clone --bare https://github.com/jy2382726/k8s-monitor "$MIRROR"
-cd "$MIRROR"
-git fetch origin '*:*' --prune 2>/dev/null || true   # 增量更新
-git update-server-info
-# 后台 http serve（一次性，预演期跑）
-nohup git daemon --base-path=/srv/git --export-all --reuseaddr --listen=0.0.0.0 --port="$PORT" >/tmp/git-daemon.log 2>&1 &
-echo "ArgoCD source: http://172.20.0.1:$PORT/k8s-monitor.git（受控偏离④）"
+BASE=/srv/git
+MIRROR="$BASE/k8s-monitor.git"
+mkdir -p "$BASE"
+if [ ! -d "$MIRROR" ]; then
+  git clone --bare https://github.com/jy2382726/k8s-monitor "$MIRROR"
+else
+  (cd "$MIRROR" && git fetch origin '*:*' --prune 2>/dev/null || true)   # 增量更新上游
+fi
+# git daemon serve git://（预演/复现期常驻；F 不清回则一直跑）
+pkill -f 'git daemon.*base-path=/srv/git' 2>/dev/null || true
+nohup git daemon --base-path="$BASE" --export-all --reuseaddr --listen=0.0.0.0 --port=9418 >/tmp/git-daemon.log 2>&1 &
+sleep 1
+echo "ArgoCD source: git://172.20.0.1/k8s-monitor.git（git daemon @ 0.0.0.0:9418）"
 ```
 
-> 注：fallback 下 ArgoCD 源非 github，弱化「真公网 Git」语义——登记进「修订记录」+ scope spec 受控偏离④。
+跑：
+```bash
+chmod +x deploy/local-git-mirror.sh
+./deploy/local-git-mirror.sh
+```
+Expected: 末行 `ArgoCD source: git://172.20.0.1/k8s-monitor.git`；`ss -tln | grep 9418` 在听；`/tmp/git-daemon.log` 无 error。
+
+> ⚠️ **裸仓 re-fetch 工作流（重要）**：ArgoCD 拉的是**本地 bare 仓**（`git://172.20.0.1`），不是 github。故每次改了 ArgoCD 管理的资源（PrometheusRule / webhook-dingtalk / sms-provider manifest）并 `git push` 后，**必须重跑 `./deploy/local-git-mirror.sh`**（脚本会 `git fetch` 更新 bare 仓），ArgoCD 下次 polling/manual sync 才见新 commit。忘记 re-fetch = ArgoCD 一直 sync 旧版本（典型坑）。
+
+- [ ] **Step 3：实测 pod → 裸仓 git:// 可达 + ArgoCD ls-remote**
+
+```bash
+# ① pod 能 reach 172.20.0.1:9418（git daemon 端口，PoC 已证 pod→172.20.0.1 HTTP 可达，同路径）
+kubectl run b1test --image=busybox:1.38.0 --restart=Never --command -- sleep 60
+kubectl wait --for=condition=ready pod/b1test --timeout=60s
+kubectl exec b1test -- sh -c 'timeout 5 sh -c "echo > /dev/tcp/172.20.0.1/9418" && echo "✓ pod→git:9418 通" || echo "✗ 不通"'
+kubectl delete pod b1test --ignore-not-found
+# ② ArgoCD 能 ls-remote 裸仓（repo-server distroless 可能无 git 二进制——Task 2 直接建 Application 测 sync 即真验）
+kubectl -n argocd exec deploy/argocd-repo-server -- ls-remote git://172.20.0.1/k8s-monitor.git 2>&1 | head -2 || \
+  echo '(repo-server 无 ls-remote 二进制——Task 2 直接建 Application sync 测，sync 成功 = D-6 落地)'
+```
+Expected: ① `✓ pod→git:9418 通`；② 返回 `<sha>\tHEAD` 或提示 Task 2 实测（皆可）。**通 = B-1 缓解落地，进 Task 1。**
+
+> ⚠️ 预演核验：若 ArgoCD 拒 `git://`（某些 argocd-cm 配置只允 https/ssh），fallback = `git http-backend` smart HTTP（`http://172.20.0.1:<port>/k8s-monitor.git`），登记修订记录。
+
+- [ ] **Step 4：commit**
+
+```bash
+git add deploy/local-git-mirror.sh
+git commit -m "feat(phase-F): D-6 本地裸仓镜像（B-1 出网缓解，实测选定）"
+```
 
 ---
 
-## Task 1：ArgoCD deployer RBAC + HTTPS_PROXY env（M11 前置）
+## Task 1：ArgoCD deployer RBAC（M11 前置）
 
-**Files:** Create `deploy/argocd/argocd-deployer-rbac.yaml`、`deploy/argocd/argocd-proxy-env.patch.yaml`
+**Files:** Create `deploy/argocd/argocd-deployer-rbac.yaml`
+
+> D-6 改走本地裸仓后，**ArgoCD 不再需要 HTTPS_PROXY env**（Task 0 Step 3 已验 repo-server 能达裸仓）。本 Task 只赋 deployer RBAC（让 application-controller 能 sync 进 monitoring ns）。
 
 - [ ] **Step 1：写 deployer RBAC（让 argocd application-controller 能 sync 进 monitoring ns）**
 
@@ -187,61 +207,11 @@ kubectl -n monitoring get role,rolebinding | grep argocd-deployer
 ```
 Expected: `role.rbac.authorization.k8s.io/argocd-deployer` + `rolebinding.rbac.authorization.k8s.io/argocd-deployer` created。
 
-- [ ] **Step 3：写 HTTPS_PROXY env patch（D-6，仅 Task 0 D-6 成立时）**
-
-Create `deploy/argocd/argocd-proxy-env.patch.yaml`：
-
-```yaml
-# D-6：给 ArgoCD repo-server + application-controller 注入 HTTPS_PROXY，
-# 让 git clone https://github.com 走宿主机 Clash（allow-lan 后 172.20.0.1:7890 可达）
-# NO_PROXY 保留集群内通信（k8s API / svc / metadata）不走代理
-apiVersion: apps/v1
-kind: Deployment
-metadata: {name: argocd-repo-server, namespace: argocd}
-spec:
-  template:
-    spec:
-      containers:
-        - name: argocd-repo-server
-          env:
-            - {name: HTTPS_PROXY, value: "http://172.20.0.1:7890"}
-            - {name: HTTP_PROXY,  value: "http://172.20.0.1:7890"}
-            - {name: NO_PROXY, value: "127.0.0.1,localhost,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local,kubernetes.default.svc"}
-```
-
-> application-controller 也需同样 patch（它也拉 git）。写第二个 patch `argocd-proxy-env-controller.patch.yaml`（同结构，metadata.name=argocd-application-server 不对——application-controller 是 **StatefulSet** `argocd-application-controller`，非 Deployment）。**预演核验**：`kubectl -n argocd get sts argocd-application-controller -o jsonpath='{.kind}'` → 确认是 StatefulSet，patch 改用 sts 战略合并。
-
-- [ ] **Step 4：apply patch + rollout**
+- [ ] **Step 3：commit**
 
 ```bash
-kubectl -n argocd patch deploy argocd-repo-server --type=strategic --patch-file deploy/argocd/argocd-proxy-env.patch.yaml
-# application-controller（StatefulSet）单独 patch（预演按 Step3 核验的 kind 写）
-kubectl -n argocd rollout restart deploy argocd-repo-server
-kubectl -n argocd rollout status  deploy argocd-repo-server --timeout=120s
-kubectl -n argocd rollout restart sts argocd-application-controller
-kubectl -n argocd rollout status  sts argocd-application-controller --timeout=180s
-# 核验 env 注入
-kubectl -n argocd get deploy argocd-repo-server -o jsonpath='{.spec.template.spec.containers[0].env[*].name}'; echo
-```
-Expected: rollout complete；jsonpath 输出含 `HTTPS_PROXY HTTP_PROXY NO_PROXY`。
-
-- [ ] **Step 5：实测 ArgoCD 能 git clone 目标仓**
-
-```bash
-# ArgoCD repo 联通性测试（注册 repo 不带 credential，public 仓免 secret）
-kubectl -n argocd exec deploy/argocd-repo-server -- \
-  git ls-remote https://github.com/jy2382726/k8s-monitor HEAD 2>&1 | head -2 || \
-  echo '(argocd-repo-server 内无 git 二进制？用 argocd-repo-server 自带的 repo-server CLI 测：见下)'
-# 若上面不可用，直接建一个临时 Application 测 sync（Task 2 会真做）
-```
-Expected: 返回 `<sha>\tHEAD`（证明 ArgoCD pod 经代理能 git clone）。**通 = D-6 验证完成**；不通 → 回 Task 0 fallback。
-
-- [ ] **Step 6：commit**
-
-```bash
-git add deploy/argocd/argocd-deployer-rbac.yaml deploy/argocd/argocd-proxy-env.patch.yaml
-# 若 fallback：git add deploy/local-git-mirror.sh
-git commit -m "feat(phase-F): ArgoCD deployer RBAC + HTTPS_PROXY env（D-6 B-1 缓解）"
+git add deploy/argocd/argocd-deployer-rbac.yaml
+git commit -m "feat(phase-F): ArgoCD deployer RBAC（monitoring ns 赋权 application-controller）"
 ```
 
 ---
@@ -315,7 +285,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/jy2382726/k8s-monitor   # fallback 时改 http://172.20.0.1:<port>/k8s-monitor.git
+    repoURL: git://172.20.0.1/k8s-monitor.git   # D-6 本地裸仓（git daemon @ 172.20.0.1:9418）
     targetRevision: main
     path: deploy/components
     directory:
@@ -386,7 +356,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/jy2382726/k8s-monitor
+    repoURL: git://172.20.0.1/k8s-monitor.git   # D-6 本地裸仓
     targetRevision: main
     path: deploy/components/webhook-dingtalk
     directory:
@@ -688,7 +658,8 @@ Expected: `✓ 卡片含真公网 runbook_url` + `HTTP/1.1 200 OK`。
 ```bash
 git add deploy/components/prometheusrule-*.yaml deploy/components/webhook-dingtalk/ deploy/verify/assert-runbook-url.sh .gitignore
 git commit -m "feat(phase-F): M14b runbook_url 真公网接线 + L1 断言（AC-US1/US3）"
-git push origin main   # 让 ArgoCD selfHeal pull 带 runbook_url 的规则
+git push origin main                  # push 到 github（Runbook raw URL 也由此更新）
+./deploy/local-git-mirror.sh          # ⚠️ 裸仓 re-fetch：ArgoCD 拉本地 bare 仓非 github，push 后必须 re-fetch 才见新 commit
 ```
 
 ---
@@ -1009,8 +980,9 @@ git commit -m "feat(phase-F): M12 Ingress Alertmanager+ArgoCD 域名收尾（L1�
   kubectl delete -f deploy/argocd/app-webhook-dingtalk.yaml
   kubectl delete -f deploy/argocd/app-sms-provider.yaml
   kubectl delete -f deploy/argocd/argocd-deployer-rbac.yaml
-  kubectl -n argocd patch deploy argocd-repo-server --type=json -p '[{"op":"remove","path":"/spec/template/spec/containers/0/env"}]'  # 回滚 HTTPS_PROXY（或按 patch 前态）
-  # 批量脚本/silence.sh 等是 Git 文件（不删集群资源）
+  # ArgoCD 无 HTTPS_PROXY env（D-6 走裸仓，未注入代理 env，无需回滚）
+  # 批量脚本/silence.sh/local-git-mirror.sh 等是 Git 文件或宿主进程（不删集群资源）
+  # 可选：停 host 侧 git daemon（pkill -f 'git daemon.*base-path=/srv/git'）——F 不清回则保留常驻
   ```
 - **修改型回前序**：
   ```bash
@@ -1029,4 +1001,5 @@ git commit -m "feat(phase-F): M12 Ingress Alertmanager+ArgoCD 域名收尾（L1�
 
 ## 修订记录
 
+- **v1.1**（2026-08-13）：**D-6 弃代理路径、转本地裸仓镜像（实测选定）**。代理路径（Clash allow-lan + ArgoCD HTTPS_PROXY）连续撞坎：① Clash 只绑 127.0.0.1 → ② allow-lan 后只绑 IPv6 `::`、IPv4 192.168.0.3:7890 `Connection refused` → ③ 再修撞 `.wslconfig firewall=true`。PoC 验裸仓三步全通（host bare clone via 127.0.0.1:7890 ✅ / pod→172.20.0.1 HTTP 可达 ✅ / git daemon 9418 同路径）。改动：Task 0 重写为裸仓（`deploy/local-git-mirror.sh` + `git daemon` git://）、Task 1 删 HTTPS_PROXY 只留 RBAC、3 个 Application `repoURL` 改 `git://172.20.0.1/k8s-monitor.git`、teardown 删代理 env 回滚、前置简化（不再要 Clash allow-lan）。主仓改 public 仍要（Runbook raw URL）。弱化「真公网 Git」语义（Runbook 仍走 github raw）→ 受控偏离④。
 - **v1.0**（2026-08-12）：初版，基于对抗性审查修订版 scope spec。B-1（github 出网 BLOCKER）→ D-6 缓解（Clash allow-lan + ArgoCD HTTPS_PROXY）+ 本地裸仓 fallback（受控偏离④）。agent 预演若踩新坑（M14a stub 位置 / ArgoCD include 生效 / busybox nc / measure-mttd 输出解析格式 / ArgoCD finalizer 删 rule 等）追加修订记录并升版本号。

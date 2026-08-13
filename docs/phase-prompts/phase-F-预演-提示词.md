@@ -8,14 +8,14 @@
 - 交付物路径：手册草稿 → docs/phase-manuals/phase-F-操作手册-草稿.md；
              预演日志 → docs/phase-manuals/phase-F-预演日志.md；
              start-state → docs/phase-manuals/phase-F-start-state.txt
-- Phase F 预演特点：① **两个闭环⓰硬用户前置**（Clash allow-lan + 主仓改 public）不做则 M11 走不通，预演必须在 Task 0 实测确认；② **B-1 BLOCKER**（github 出网）有 fallback（本地裸仓，受控偏离④）；③ **MTTD 全量 ~2.5h 长跑**（4 类 ×5，agent 预演跑全量）；④ **F 不清回**（teardown 仅服务用户复现 F 前还原）；⑤ **MVP done 最终门**——9 AC 全闭环 + verify-all 全绿 + recover 三场景。
+- Phase F 预演特点：① **闭环⓰硬用户前置 = 主仓改 public**（Runbook 用；~~Clash allow-lan~~ **已弃**——代理路径撞 IPv6-only 绑定 + `.wslconfig firewall=true` 兔子洞，D-6 改走本地裸仓，agent 在 Task 0 跑 `deploy/local-git-mirror.sh`）；② **B-1 github 出网**：D-6 选定本地裸仓镜像（PoC 三步全通），不再 BLOCKER；③ **MTTD 全量 ~2.5h 长跑**（4 类 ×5，agent 预演跑全量）；④ **F 不清回**（teardown 仅服务用户复现 F 前还原）；⑤ **MVP done 最终门**——9 AC 全闭环 + verify-all 全绿 + recover 三场景。
 -->
 
 # 提示词③ —— agent 预演执行（Phase F 闭环②，启动 Phase F 预演）
 
 > 这是**预演**——照 plan 真实部署一遍。plan = `docs/superpowers/plans/2026-08-12-phase-F-mvp-done.md`（v1.0，11 Task）。配套 scope spec = `docs/superpowers/specs/2026-08-12-phase-f-scope-design.md`（D-1~D-6 + 受控偏离①-④，对抗性审查修订版）。
 >
-> ⚠️ **预演前两个闭环⓰硬用户前置必须已做**（plan Task 0，否则 M11 GitOps 走不通，预演在 Task 0 就卡）：① 宿主机 Clash 配置 `allow-lan: true`（已重启生效，7890 绑 0.0.0.0）；② 主仓改 public（`gh repo edit jy2382726/k8s-monitor --visibility public`，改前已扫 tracked 内容安全）。**预演 agent 先实测这两项到位再开工**（见下「闭环⓰ 先做」）。
+> ⚠️ **预演前闭环⓰硬用户前置 = 主仓改 public**（`gh repo edit jy2382726/k8s-monitor --visibility public`，Runbook raw URL 用；改前已扫 tracked 内容安全）。**D-6 已改走本地裸仓（弃 Clash allow-lan 代理路径——撞 IPv6-only 绑定 + 防火墙兔子洞）**，agent 在 Task 0 起 `deploy/local-git-mirror.sh`（host clone bare + git daemon `git://`）。**预演 agent 先实测主仓 public 到位 + Task 0 裸仓可达再开工**（见下「闭环⓰ 先做」）。
 
 ## 闭环⓰ 先做（硬前置核验，不通过则停下报用户）
 
@@ -23,7 +23,7 @@
 
 1. **主仓已是 public**（D-1/D-3）：
    `gh repo view jy2382726/k8s-monitor --json visibility` → 期望 `"visibility":"PUBLIC"`。仍是 PRIVATE → 停下报「请用户 `gh repo edit jy2382726/k8s-monitor --visibility public`（改前 agent 跑最终敏感扫描，scope spec §8）」。
-2. **Clash allow-lan 已生效**（D-6，B-1 缓解）：起 busybox pod 实测 `https_proxy=http://172.20.0.1:7890 wget --timeout=8 -S -O/dev/null https://github.com` → 期望 `HTTP/2 200`（或 301/302）。`Connection refused`/超时 → 停下报「请用户 Clash 设 `allow-lan: true` 并重启 Clash」。若用户确认已设 allow-lan 仍不通 → **降级受控偏离④**（本地裸仓，plan Task 0 Step 3），登记进预演日志 + plan 修订记录。
+2. **D-6 本地裸仓镜像已起**（B-1 缓解，agent 在 plan Task 0 跑 `deploy/local-git-mirror.sh`）：`ss -tln | grep 9418` 在听 + busybox pod 测 `echo > /dev/tcp/172.20.0.1/9418` 通 + `kubectl -n argocd exec deploy/argocd-repo-server -- ls-remote git://172.20.0.1/k8s-monitor.git`（或 Task 2 直接 sync 测）能拉。若 ArgoCD 拒 `git://` 协议 → fallback `git http-backend` smart HTTP（登记修订记录）。**代理路径（Clash allow-lan）已弃，勿再试**。
 3. **凭据就绪**（凭据型，前序 Phase C/D 已建，F 保留不删）：`kubectl -n monitoring get secret dingtalk-credentials-main dingtalk-credentials-watchdog webhook-dingtalk-config` 全在；`kubectl -n monitoring get cm oncall` 在（F 补真实排班结构 + 占位号码，plan Task 7）。缺则停下报凭据未就绪 + 创建命令模板。
 4. **集群开始态**（Phase E 用户复现版，F 开始态）：`kubectl get prometheusrules -n monitoring` 有 4 个（core/capacity-controlplane/monitoring-self/slo-recording）；`kubectl -n argocd get application` 空（F 建）；`./deploy/verify/verify-all.sh` 22/0 全绿；execute_alerts=false（Phase E 设）。漂移则先 `recover.sh` 拉回。
 5. **存 start-state**（teardown 还原 diff 基线，docs/14 §3.3 line 138）：
@@ -37,8 +37,8 @@
 
 用 `superpowers:subagent-driven-development` skill 执行 `docs/superpowers/plans/2026-08-12-phase-F-mvp-done.md`。**每个 Task 派 fresh subagent + 两段 review**（review 1：代码/部署正确性；review 2：验收门推进）。Task 顺序固定（依赖链）：
 
-- **Task 0**（B-1 前置硬依赖，🔴 BLOCKER gate）：Clash allow-lan + 主仓 public + 实测 pod 经代理可达 github。D-6 成立 → 进 Task 1；不成立 → 降级本地裸仓（受控偏离④）。
-- **Task 1**：ArgoCD deployer RBAC + HTTPS_PROXY env（D-6）。
+- **Task 0**（B-1 出网缓解，D-6 本地裸仓）：主仓 public（Runbook）+ agent 跑 `deploy/local-git-mirror.sh`（host clone bare via 127.0.0.1:7890 + git daemon git://9418）+ 实测 pod→`git://172.20.0.1:9418` 可达。通 → 进 Task 1。
+- **Task 1**：ArgoCD deployer RBAC（D-6 走裸仓，无 HTTPS_PROXY env）。
 - **Task 2-4**：3 个 ArgoCD Application（monitoring-rules / webhook-dingtalk / sms-provider）。
 - **Task 5**：silence.sh 紧急操作 + L1 断言。
 - **Task 6**：M14b Runbook 公网内容 + runbook_url 接线（AC-US1/US3）。
@@ -72,7 +72,7 @@
 
 ## Phase F 预演特殊点（区别于 A-E，踩到按此处理）
 
-1. **B-1 fallback 分支**（D-6）：Task 0 实测 pod 经 `172.20.0.1:7890` 不通 github → 降级本地裸仓镜像（plan Task 0 Step 3，`deploy/local-git-mirror.sh`），3 个 Application 的 `source.repoURL` 改 `http://172.20.0.1:<port>/k8s-monitor.git`。登记进**受控偏离④**（预演日志 + plan 修订记录 + scope spec §7④已预留）。
+1. **B-1 D-6 本地裸仓（选定，非 fallback）**：`deploy/local-git-mirror.sh` 起 host bare clone（via 127.0.0.1:7890）+ `git daemon` serve `git://172.20.0.1/k8s-monitor.git`（PoC 三步全通）。3 个 Application `source.repoURL` = `git://172.20.0.1/k8s-monitor.git`。**代理路径（Clash allow-lan）已弃**——撞 IPv6-only 绑定 + `.wslconfig firewall=true` 兔子洞，勿再试。弱化「真公网 Git」语义（Runbook 仍走 github raw 真公网）→ 受控偏离④（scope spec §7④）。若 ArgoCD 拒 `git://` → fallback `git http-backend` smart HTTP。
 2. **MTTD 全量 ~2.5h 长跑**（Task 9）：not-ready 5×6min + crashloop 5×11min + oom 5×2min + pod-pending 5×11min + cleanup。agent 预演跑全量；送达率任一类 <100% = 北极星 FAIL，**停下 systematic-debugging**（丢失 = MTTD=∞ = 直接判失败，不取中位）。**用户复现按降级每类抽验 1 次**（闭环⑤，非预演）。
 3. **F 不清回**（teardown 仅服务用户复现 F 前还原，同 Phase E）：预演跑完**不执行 teardown**（teardown 留到提示词⑤，且 F 完成后集群 = MVP 完整态 M1+A~F 全在）。预演只产 start-state.txt（闭环⓰已存）供后续 diff。
 4. **reachability 盲区勿当 bug**（受控偏离②）：ArgoCD NodePort 网络层 wedge 期间零告警/dashboard 全绿（docs/11 §8 #24 + memory `project_monitoring_reachability_gap`），是已知 limitation，F 演练不覆盖网络路径故障，**勿当 F 的 bug 修**。延后 Phase F 后（blackbox 二期）。
@@ -84,7 +84,7 @@
 
 plan 标注了若干 plan 阶段不可知、需预演实测调的点，预演实测后回写 plan「修订记录」+ 升版本号：
 
-- **Task 1 Step 1**：`argocd-application-controller` SA 名实查（`kubectl -n argocd get sa`）；application-controller 是 **StatefulSet**（非 Deployment），HTTPS_PROXY patch 改 sts 战略合并。
+- **Task 1 Step 1**：`argocd-application-controller` SA 名实查（`kubectl -n argocd get sa`）。（v1.1 起 Task 1 只赋 RBAC，无 HTTPS_PROXY patch——D-6 走裸仓。）
 - **Task 1 Step 5 / Task 0 Step 2**：argocd-repo-server 内是否有 `git` 二进制；busybox pod egress 测法。
 - **Task 2 Step 4**：ArgoCD `directory.include: prometheusrule-*.yaml` 是否生效（v3.4.4 应支持）；不生效 fallback = 移 4 个 rule 进 `deploy/components/argocd-rules/` 子目录。
 - **Task 3 Step 1**：`deploy/components/webhook-dingtalk/manifest.yaml` 实际含哪些 kind（Deployment/Service/CM），config Secret 凭据型确认不在 manifest。

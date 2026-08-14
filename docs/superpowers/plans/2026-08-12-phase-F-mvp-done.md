@@ -1001,5 +1001,11 @@ git commit -m "feat(phase-F): M12 Ingress Alertmanager+ArgoCD 域名收尾（L1�
 
 ## 修订记录
 
+- **v1.2**（2026-08-14，Task 0 预演实测回填）：**Task 0 Step 3 两处命令修正**（不改 v1.1 架构，仅修预演踩到的命令 bug）：
+  1. **pod 可达性测试**：`sh -c 'echo > /dev/tcp/172.20.0.1/9418'` 是 **bash 专有**，busybox:1.38.0 用 ash **无 `/dev/tcp`** → 假性「不通」。修正为 busybox 兼容：`kubectl exec <pod> -- nc -z -w5 172.20.0.1 9418`（exit 0 = 通）。
+  2. **ArgoCD ls-remote 测试**：plan 写成 `... exec -- ls-remote git://...`（漏 `git` 前缀，`ls-remote` 不是独立二进制）→ `executable file not found`。修正为 `kubectl -n argocd exec deploy/argocd-repo-server -- git ls-remote git://172.20.0.1/k8s-monitor.git`。实测 repo-server **有** `/usr/bin/git`（非 distroless 无 git），可直接真验 ls-remote（Task 2 Application sync 仍是最终门，但 ls-remote 是有效早期信号）。
+  3. **re-sync 机制定论**：脚本内 `git fetch origin '*:*'` 从 github 拉，但 github main 落后 worktree，单 fetch 传播不了 worktree 改动。**权威 re-sync** = `git push /srv/git/k8s-monitor.git HEAD:main`（worktree 里 commit 后跑；回退用 `--force`）。Task 0 实测三 SHA 对齐（worktree HEAD = 裸仓 main = ArgoCD view）。后续 Task 2/3/4/6 改完文件 commit 后必跑此命令。
+  4. ArgoCD **不拒 `git://`**（无需 smart HTTP fallback），Task 0 实测 repo-server `git ls-remote` 正常返回。
+  - Task 0 已完成（commit `ce178d7`，controller 独立复验全过）。
 - **v1.1**（2026-08-13）：**D-6 弃代理路径、转本地裸仓镜像（实测选定）**。代理路径（Clash allow-lan + ArgoCD HTTPS_PROXY）连续撞坎：① Clash 只绑 127.0.0.1 → ② allow-lan 后只绑 IPv6 `::`、IPv4 192.168.0.3:7890 `Connection refused` → ③ 再修撞 `.wslconfig firewall=true`。PoC 验裸仓三步全通（host bare clone via 127.0.0.1:7890 ✅ / pod→172.20.0.1 HTTP 可达 ✅ / git daemon 9418 同路径）。改动：Task 0 重写为裸仓（`deploy/local-git-mirror.sh` + `git daemon` git://）、Task 1 删 HTTPS_PROXY 只留 RBAC、3 个 Application `repoURL` 改 `git://172.20.0.1/k8s-monitor.git`、teardown 删代理 env 回滚、前置简化（不再要 Clash allow-lan）。主仓改 public 仍要（Runbook raw URL）。弱化「真公网 Git」语义（Runbook 仍走 github raw）→ 受控偏离④。
 - **v1.0**（2026-08-12）：初版，基于对抗性审查修订版 scope spec。B-1（github 出网 BLOCKER）→ D-6 缓解（Clash allow-lan + ArgoCD HTTPS_PROXY）+ 本地裸仓 fallback（受控偏离④）。agent 预演若踩新坑（M14a stub 位置 / ArgoCD include 生效 / busybox nc / measure-mttd 输出解析格式 / ArgoCD finalizer 删 rule 等）追加修订记录并升版本号。

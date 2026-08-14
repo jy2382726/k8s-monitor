@@ -1,0 +1,25 @@
+# Phase F M11：ArgoCD 接管 webhook-dingtalk（Phase C 裸 Deployment → GitOps）
+# 管理范围：manifest.yaml 内的 Deployment + Service（structural 资源）
+# 不管（手动维持）：
+#   - webhook-dingtalk-config Secret（凭据型，assemble-webhook-config.sh 渲染）
+#   - webhook-dingtalk-templates ConfigMap（Phase C 设计：独立 kubectl create，不进 manifest.yaml）
+#     见 docs/phase-manuals/phase-C-钉钉触达-操作手册.md §解法
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: webhook-dingtalk
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git://172.20.0.1/k8s-monitor.git   # D-6 本地裸仓（git daemon @ 172.20.0.1:9418）
+    targetRevision: main
+    path: deploy/components/webhook-dingtalk
+    directory:
+      include: manifest.yaml          # 只管 Deployment/Service，不管 *.template / config.yaml.template
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=false]

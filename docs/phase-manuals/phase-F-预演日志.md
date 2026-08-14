@@ -107,7 +107,16 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **assert-runbook-url.sh** 已写（含 330s 全触发逻辑，留验收门/Task 9 用）；本次只验 wiring（raw 200 + 注解在位 + 模板引用），全卡片触发 defer Task 9。
 - **subagent 遗留**：assert-runbook-url.sh chmod +x 未提交 → controller 补 commit。
 - **改的资源**（teardown 用）：修改 3 rule 文件（+注解，ArgoCD 管，回滚 = checkout 7c97e94 版 + re-sync）+ template.tmpl（stub→真渲染，手动管）+ templates CM（重建）；新建 docs/runbook/ 7 文件 + assert-runbook-url.sh。
-| 7 oncall CM + 值班手册 | 待 | |
+| 7 oncall CM + 值班手册 | ✅ 完成 | `17da895`；**⚠️ plan 平铺 5-key 结构会破坏 assemble-webhook-config.sh**（读 oncall.yaml 的 primary.phone/backup.phone）→ 改扩展不替换（+rotation/+escalate）；awk 解析回归通过 |
+
+### Task 7 详情
+
+- subagent 中途被打断（用户 reject + classifier 不稳），controller 接管完成；手册初稿已写（内容质量好），§1 key 名与实际 CM 不符处 controller 修正。
+- **⚠️ plan 偏离（重要，Task 7 Step 2）**：plan 给的平铺 5-key CM（primary/secondary/rotation/escalate/dingtalk_at 顶层 key）会**破坏 `deploy/verify/assemble-webhook-config.sh`**——它用 awk 从 `oncall.yaml` 的 `primary:`/`backup:` section 提取 `  phone:` 渲染 @人 mobiles（AC-US1 依赖）。**正确做法 = 扩展不替换**：保留嵌套 `oncall.yaml`（primary/backup/p0_mention 原样，phone 不动），只在 yaml 内追加 `rotation: "weekly"` + `escalate`（占位）。`secondary`≈已有 `backup`、`dingtalk_at`≈已有 primary.phone/backup.phone（机制不同），均不另加。改后 awk 解析回归通过（primary/backup phone 提取 OK）。
+- **改前值**（teardown 用）：oncall CM 仅 1 key `oncall.yaml`（228 字符：primary/backup 各 name+dingtalk_user_id+phone + p0_mention）。teardown 还原 = 去掉 rotation/escalate 两行 apply 回去。
+- **改后**：+`rotation: "weekly"` +`escalate: "+86-1XX-XXXX-XXXX"`（占位）。D-4「真实排班结构+占位号码」满足。
+- 手册 `docs/oncall-手册.md`（91 行 6 节）：排班（嵌套 key 表 + 换班操作含 assemble+重启 webhook pod）/响应时限（P0≤10min P1≤30min）/升级路径/交接清单（4 项）/紧急改规则流程（silence 止血 + kubectl edit 事后回写 Git 警告——Task 5 Step 4 defer 内容已并入）/工具速查。commit `17da895`。
+- **脱敏注记**：oncall CM 内 phone 是真实号码（Phase C 实测 @ 用），只存在于集群 CM（不入 Git），日志/手册中一律尾 4 位或占位。
 | 8 verify-all 06 对齐 | 待 | |
 | 9 MTTD 全量 4类×5 | 待 | |
 | 10 recover 三场景 | 待 | |

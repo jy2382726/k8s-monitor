@@ -117,7 +117,19 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **改后**：+`rotation: "weekly"` +`escalate: "+86-1XX-XXXX-XXXX"`（占位）。D-4「真实排班结构+占位号码」满足。
 - 手册 `docs/oncall-手册.md`（91 行 6 节）：排班（嵌套 key 表 + 换班操作含 assemble+重启 webhook pod）/响应时限（P0≤10min P1≤30min）/升级路径/交接清单（4 项）/紧急改规则流程（silence 止血 + kubectl edit 事后回写 Git 警告——Task 5 Step 4 defer 内容已并入）/工具速查。commit `17da895`。
 - **脱敏注记**：oncall CM 内 phone 是真实号码（Phase C 实测 @ 用），只存在于集群 CM（不入 Git），日志/手册中一律尾 4 位或占位。
-| 8 verify-all 06 对齐 | 待 | |
+| 8 verify-all 06 对齐 | ✅ 完成 | `b758564`；新增「06 §3.11.3 17 名清单」检查（RED→缺 3 条）+ 补 3 条工作负载规则 → 23/0 GREEN；baseline.txt 实为资源基线（非检查项，未动）；**⚠️ Task 9 命名坑：pod-pending 实际 alert=KubePodNotReady 非 KubePodPending** |
+
+### Task 8 详情
+
+- **06 对齐 diff**（实测，非假设）：
+  - §3.10.1 元监控 8 条（Watchdog/PrometheusDown/AlertmanagerDown/GrafanaDown/DingtalkWebhookDown/NotificationFailure/RuleEvaluationFailure/MonitoringDiskFull）**全在**（self-mon-check.sh 已覆盖）。
+  - §3.11.3 核心 15 条：12 条在（KubeNodeNotReady 按 Phase A 拆 Worker/Master/Multiple 三条，06 §3.4 注记）；**缺 3 条工作负载**：`KubeStatefulSetReplicasMismatch` / `KubeDaemonSetNotScheduled` / `KubeJobFailed`。
+- **RED-first**：verify-all.sh 加检查「06 §3.11.3 核心告警规则清单已加载（17 名）」（单次查 /api/v1/rules + 逐名 grep）→ 跑出 `[FAIL] 缺: KubeStatefulSetReplicasMismatch KubeDaemonSetNotScheduled KubeJobFailed` ✓ RED 确认。
+- **GREEN**：core-rules.yaml 的 kubernetes-workload.rules group 补 3 条（06 verbatim expr，severity=warning，runbook_url→crashloop.md 跟随现有 workload 规则模式）→ commit `b758564` + re-sync 裸仓 + ArgoCD hard refresh（`patch annotation argocd.argoproj.io/refresh=hard`）→ Prometheus 加载 26 alerting 规则（23+3）→ verify-all **23 PASS / 0 FAIL**。
+- **⚠️ 瞬时坑**（记进手册）：ArgoCD re-sync PrometheusRule 触发 **Prometheus 全规则 reload**，recording rule 即时查询撞 lookback-delta stale 窗口 → verify-all 紧接着跑会假 FAIL `SLO recording rules 有数据`（直接重跑 slo-check exit 0，证瞬时）。**sync 后等 ~1min 再跑 verify-all，或单次 FAIL 先重跑确认**。
+- **baseline.txt 偏离**：plan 说「同步新检查项基线」，但 baseline.txt 实为 **Prometheus 故障时的资源水位参考**（kubectl top / pod 数 / WSL 内存，2026-07-08 数据），**不是检查项清单** → 无需同步检查项。不动它。
+- **⚠️ Task 9 命名坑（必须修）**：plan measure-mttd-batch.sh 的 `ALERT[pod-pending]=KubePodPending`，但**实际 alert 名是 `KubePodNotReady`**（06 §3.11.3 + 实测规则名）。Task 9 须改映射 `pod-pending→KubePodNotReady`。inject-fault.sh 的 pod-pending 注入对应这条规则。
+- **改的资源**（teardown 用）：core-rules.yaml +3 alert（ArgoCD 管，回滚 = checkout b758564 前 + re-sync）；verify-all.sh +1 检查段。规则总数 23→26 alerting。
 | 9 MTTD 全量 4类×5 | 待 | |
 | 10 recover 三场景 | 待 | |
 | 11 M12 Ingress | 待 | |

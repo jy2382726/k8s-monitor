@@ -1016,5 +1016,14 @@ git commit -m "feat(phase-F): M12 Ingress Alertmanager+ArgoCD 域名收尾（L1�
      - ③ **raw `DELETE /api/v2/silences/{id}` 在 AM v0.33.0 HA 实测 404**（collection GET 查得到 gossip 同步的 silence，但 `/{id}` 单资源路径检索不到）。改 **`amtool silence expire`**（kubectl exec 进 AM pod，exit 0 gossip 全局生效）。
      - ④ **`date -u -d "+30m"` 报 invalid date**（GNU date 不认 `+30m` 速记）。加 DUR 规范化（`1h→+1 hours`/`30m→+30 minutes`/`2d→+2 days`）。
      - assert-silence.sh 三态（active→suppressed→active）独立复现通过。Task 5 commit `e3ded06`。无集群资源改动（合成 alert/silence 均临时）。
+  9. **Task 9 预演发现（2026-08-14，含用户决策）**：
+     - **受控偏离⑤（oom 类比照 control-plane）**：`KubeContainerOOMKilled` 在 kind 环境**结构上不可触发**——containerd v2.2.0/cgroupv2 对 memcg OOM 上报 `reason=Error` 而非 `OOMKilled`（crictl 实证 + 全集群 KSM `last_terminated_reason` 零 OOMKilled series），规则匹配 0 series = 死规则。**用户决策（AskUserQuestion）**：MTTD 全量只跑 **3 类×5**（not-ready/crashloop/pod-pending），oom 改验「规则在位 + 评估无错」（同受控偏离① control-plane 性质）。不动 06 expr（06 是生产基线，kind 上报问题是环境差异）。登记 **I-2 生产割接前必验**：生产 containerd 是否正确上报 OOMKilled（与 I-1 dashboard 假绿并列）。
+     - **pod-pending 告警名**：`KubePodNotReady` 非 `KubePodPending`（后者不存在，Task 8 实测）。
+     - **auto-silence 背景用 silence.sh**（port-forward+curl 单对象），勿用 plan 原文 `kubectl get --raw -X POST`（见上文 8①）。
+     - **inject-fault.sh oom 注入修复**（`3baf5cc`）：原 `awk a=a "x"` O(n²) 5min 仅涨 2Mi 永不 OOM（Phase C 遗留 bug）→ 改指数翻倍，毫秒级真实 memcg OOM。
+     - **measure-mttd.sh 单次输出格式**：`MTTD（单次, <alert>）= <n>s ≈ ...`（带 ANSI 色中文括号）；解析 `grep '单次' | grep -oE '[0-9]+s' | head -1 | tr -dc '0-9'`；未送达时 exit 0 仍，靠输出行有无判送达。
+     - **同类连跑须等上一轮 alert 完全 resolve**（查 `ALERTS` 归零），否则 AM repeat_interval 吞下一轮通知 → 假 FAIL。
+     - **⚠ 观察项（全量后分析）**：not-ready 单次 smoke 额外开销 149s > 60s 门（含节点 ~50s NotReady 爬坡 + KSM scrape + group_wait）——等 5 样本中位再判，若中位仍超需分析链路各段耗时。
+     - 批量脚本 `deploy/verify/measure-mttd-batch.sh`（`3baf5cc`，支持 N=/TYPES=/WORKER= env，trap 兜底 cleanup+清 auto-silence）。
 - **v1.1**（2026-08-13）：**D-6 弃代理路径、转本地裸仓镜像（实测选定）**。代理路径（Clash allow-lan + ArgoCD HTTPS_PROXY）连续撞坎：① Clash 只绑 127.0.0.1 → ② allow-lan 后只绑 IPv6 `::`、IPv4 192.168.0.3:7890 `Connection refused` → ③ 再修撞 `.wslconfig firewall=true`。PoC 验裸仓三步全通（host bare clone via 127.0.0.1:7890 ✅ / pod→172.20.0.1 HTTP 可达 ✅ / git daemon 9418 同路径）。改动：Task 0 重写为裸仓（`deploy/local-git-mirror.sh` + `git daemon` git://）、Task 1 删 HTTPS_PROXY 只留 RBAC、3 个 Application `repoURL` 改 `git://172.20.0.1/k8s-monitor.git`、teardown 删代理 env 回滚、前置简化（不再要 Clash allow-lan）。主仓改 public 仍要（Runbook raw URL）。弱化「真公网 Git」语义（Runbook 仍走 github raw）→ 受控偏离④。
 - **v1.0**（2026-08-12）：初版，基于对抗性审查修订版 scope spec。B-1（github 出网 BLOCKER）→ D-6 缓解（Clash allow-lan + ArgoCD HTTPS_PROXY）+ 本地裸仓 fallback（受控偏离④）。agent 预演若踩新坑（M14a stub 位置 / ArgoCD include 生效 / busybox nc / measure-mttd 输出解析格式 / ArgoCD finalizer 删 rule 等）追加修订记录并升版本号。

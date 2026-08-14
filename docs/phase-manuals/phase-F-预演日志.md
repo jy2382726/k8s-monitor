@@ -90,8 +90,8 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **re-sync 跑了**：`git push /srv/git/k8s-monitor.git HEAD:main`，裸仓 main `ce178d7..7aefb78`，三 SHA 对齐。
 - **⚠️ plan 偏离（3）**：plan 断言阈值写 `≥40`，**实测 4 文件共 27 条规则**（capacity 6 + core 9 + monitoring-self 8 + slo 4 = 27），Prom API 双向核验。assert 脚本阈值是 **CLI arg**（`EXP_RULES=$2`，非硬编），所以**调用方传 27 不是 40**——操作手册/验收门/Task 8 集成时用 27。plan 40 是未核验估算（同 `feedback-plan-assumptions-must-verify` 坑）。
 - **改的资源**（teardown 用）：新建 Application `monitoring-rules`（ns argocd，delete 即可）；4 个 PrometheusRule **管理权转移**（手 apply → ArgoCD 管，tracking 注解）。teardown 还原手 apply：删 Application + 重 apply 4 rule（或保留 Application 关 selfHeal）。
-| 3 webhook-dingtalk Application | 待 | |
-| 4 sms-provider NoOp | 待 | |
+| 3 webhook-dingtalk Application | ✅ 完成 | `455c006`；ArgoCD 管 Deploy+Service（2 资源）；manifest 实测只 2 段（templates CM 是 Phase C 手动设计，未扩张）；Secret/CM 维持手动；webhook 仍 Ready |
+| 4 sms-provider NoOp | ✅ 完成 | `7071b25`；NoOp 端点 3/3 稳定返 JSON；busybox nc 实测修 plan 3 处 bug（-q 不支持/-w 空窗/body 未送）；ArgoCD 管 Deploy+Service；新源文件须 commit+re-sync **先于** apply |
 | 5 silence.sh | 待 | |
 | 6 Runbook + runbook_url | 待 | |
 | 7 oncall CM + 值班手册 | 待 | |

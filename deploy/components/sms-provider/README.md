@@ -36,10 +36,11 @@
 
 ## 预演实测修正（manifest.yaml 内注释同）
 
-plan verbatim 的 nc 命令在 `busybox:1.38.0` 上踩了两处，均已修正（实测证据见预演日志）：
+plan verbatim 的 nc 命令在 `busybox:1.38.0` 上踩了三处，均已修正（实测证据见预演日志）：
 
-1. `-q 1` → `-w 2`：该 busybox nc 无 `-q`（`nc -h` 不含，报 `punt!`）；`-w 2`（读超时 2s）实测等价。
-2. printf 末尾追加 `; cat /tmp/resp`：plan 原版只发 header+Content-Length、body 从未送出，client 报 `connection closed prematurely`；追加 cat 把 body 拼进同一管道即修复。
+1. **去掉 `-q 1`**：该 busybox nc 无 `-q` 选项（`nc -h` 不含，报 `punt!`）。
+2. **去掉超时参数（不用 `-w`）**：`-w N` 会让 idle listener 每 N 秒超时退出 → loop 重绑，产生约 0.5–1s 的 "connection refused" 空窗，单次 wget 约 20% 概率被拒。去掉后 idle listener 持续 LISTEN（实测 4s 内 8/8 采样端口在听），单次连接确定性可达；serve 完 client 断开 + stdin EOF 后 nc 自然退出，loop 立即重新 listen 接下一个请求（实测连发 5/5 成功）。
+3. **printf 末尾追加 `; cat /tmp/resp`**：plan 原版只发 header + Content-Length、body 从未送出，client 报 `connection closed prematurely`；追加 cat 把 body 拼进同一管道即修复。
 
 ## 资源清单
 

@@ -21,13 +21,16 @@ spec:
               echo '{"status":"noop","message":"SmsProvider 一期 NoOp，二期接入（CLAUDE.md §4）"}' > /tmp/resp
               while true; do
                 # 占位 HTTP：用 busybox nc 起 8080，永远返 NoOp JSON
-                # 预演-tune（实测修正 plan verbatim 两处）：
-                #   ① -q 1 → -w 2：busybox:1.38.0 nc 无 -q 选项（nc -h 不含 -q，报 "punt!"）；
-                #     -w 2（read timeout 2s）实测等价——client 读走 body/断开后 nc 退出，loop 重新 listen。
-                #   ② 末尾追加 `; cat /tmp/resp`：plan verbatim 的 printf 只发 header+Content-Length，
+                # 预演-tune（实测修正 plan verbatim 三处）：
+                #   ① 去 -q 1：busybox:1.38.0 nc 无 -q 选项（nc -h 不含 -q，报 "punt!"）。
+                #   ② 去 -w：-w N 会让 idle listener 每 N 秒超时退出→loop 重绑，产生 ~0.5-1s
+                #     "connection refused" 空窗（单次 wget ~20% 概率被拒）。去掉 -w 后 idle listener
+                #     持续 LISTEN（实测 4s 内 8/8 采样 count=1），单次连接确定性可达；serve 完
+                #     client 断开 + stdin EOF 后 nc 退出，loop 立即重新 listen 接下一个（实测 5/5）。
+                #   ③ 末尾追加 `; cat /tmp/resp`：plan verbatim 的 printf 只发 header+Content-Length，
                 #     body 从未送出 → client "connection closed prematurely"。追加 cat 把 body 拼进同一管道。
                 ( printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n' "$(wc -c </tmp/resp)"
-                  cat /tmp/resp ) | nc -l -p 8080 -w 2 >/dev/null 2>&1 || sleep 1
+                  cat /tmp/resp ) | nc -l -p 8080 >/dev/null 2>&1 || sleep 1
               done
           ports: [{containerPort: 8080, name: http}]
           resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 50m, memory: 32Mi}}

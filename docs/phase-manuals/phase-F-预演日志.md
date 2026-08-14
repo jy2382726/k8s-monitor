@@ -75,8 +75,21 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **敏感扫描** [PASS]：12 文件命中但全合法（注释/secretName 引用/auth_password_file 路径/运行时 base64/REDACTED/admin123 占位），无明文凭据。
 - **plan 偏差**（已回写 plan v1.2 修订记录）：① Step 3 pod 测试 `/dev/tcp` 是 bash 专有，busybox ash 无 → 改 `nc -z 172.20.0.1 9418`；② Step 3 `ls-remote git://...` 漏 `git` 前缀 → 改 `git ls-remote`；③ 跳过 `gh repo edit --visibility public`（已 public + 不可逆，agent 不代跑）。
 - **改的资源**（teardown 用）：新建 `deploy/local-git-mirror.sh`（新建型，Git 文件）；宿主进程 git daemon（非集群资源，teardown 可选 `pkill -f 'git daemon.*base-path=/srv/git'`）；裸仓 `/srv/git/k8s-monitor.git`（宿主文件，非集群）。**无集群资源改动**。
-| 1 ArgoCD deployer RBAC | 待 | |
-| 2 monitoring-rules Application | 待 | |
+| 1 ArgoCD deployer RBAC | ✅ 完成 | `54e06db`；Role+RoleBinding in monitoring ns；SA 名实查 `argocd-application-controller`；controller 直跑（Agent 分类器临时不可用 + task 简单 verbatim）|
+| 2 monitoring-rules Application | ✅ 完成 | `7aefb78`；sync=Synced/Healthy；include 生效只管 4 rule；ArgoCD 接管（tracking 注解，无 delete+recreate）；Prom 27 规则全载；re-sync 跑 |
+
+### Task 2 详情
+
+- **subagent** DONE，controller 独立复验全过。
+- RED（Step 3）：`✗ sync.status=（空）`（app 未建）→ 符合预期。
+- 新建 `deploy/argocd/app-monitoring-rules.yaml`（repoURL `git://172.20.0.1/k8s-monitor.git`, path `deploy/components`, `directory.include: prometheusrule-*.yaml`）+ `deploy/verify/assert-argocd-sync.sh` + `.gitignore` 6 行白名单。commit `7aefb78`。
+- **`directory.include` 生效**（ArgoCD v3.4.4 支持）：`status.resources` 恰好 4 个 PrometheusRule，无 values/dashboard/cluster-issuer 泄漏，**未触发子目录 fallback**。
+- **sync 方式**：argocd CLI 未装、`exec deploy/argocd-server` 受 auth 阻（"no session information"）→ **automated syncPolicy apply 后 ~10s 自动 reconcile**，无需手动 sync/等 polling。
+- **GREEN**：sync=Synced / health=Healthy / Prometheus 已加载 27 条规则（8 group）。
+- **ArgoCD 接管 4 rule**：全带 `argocd.argoproj.io/tracking-id: monitoring-rules:...` 注解，patch 接管保留原 label（release/phase/app.kubernetes.io/name + prometheus-operator-validated 注解），**无 delete+recreate，无规则消失**。
+- **re-sync 跑了**：`git push /srv/git/k8s-monitor.git HEAD:main`，裸仓 main `ce178d7..7aefb78`，三 SHA 对齐。
+- **⚠️ plan 偏离（3）**：plan 断言阈值写 `≥40`，**实测 4 文件共 27 条规则**（capacity 6 + core 9 + monitoring-self 8 + slo 4 = 27），Prom API 双向核验。assert 脚本阈值是 **CLI arg**（`EXP_RULES=$2`，非硬编），所以**调用方传 27 不是 40**——操作手册/验收门/Task 8 集成时用 27。plan 40 是未核验估算（同 `feedback-plan-assumptions-must-verify` 坑）。
+- **改的资源**（teardown 用）：新建 Application `monitoring-rules`（ns argocd，delete 即可）；4 个 PrometheusRule **管理权转移**（手 apply → ArgoCD 管，tracking 注解）。teardown 还原手 apply：删 Application + 重 apply 4 rule（或保留 Application 关 selfHeal）。
 | 3 webhook-dingtalk Application | 待 | |
 | 4 sms-provider NoOp | 待 | |
 | 5 silence.sh | 待 | |

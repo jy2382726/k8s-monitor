@@ -93,7 +93,20 @@ git push /srv/git/k8s-monitor.git HEAD:main
 | 3 webhook-dingtalk Application | ✅ 完成 | `455c006`；ArgoCD 管 Deploy+Service（2 资源）；manifest 实测只 2 段（templates CM 是 Phase C 手动设计，未扩张）；Secret/CM 维持手动；webhook 仍 Ready |
 | 4 sms-provider NoOp | ✅ 完成 | `7071b25`；NoOp 端点 3/3 稳定返 JSON；busybox nc 实测修 plan 3 处 bug（-q 不支持/-w 空窗/body 未送）；ArgoCD 管 Deploy+Service；新源文件须 commit+re-sync **先于** apply |
 | 5 silence.sh | ✅ 完成 | `e3ded06`；3 态断言独立复现通过（active→suppressed→active）；实测修 plan 4 处（get --raw 不能 POST / silences 单对象非数组 / DELETE 404 改 amtool / date -d +30m）；**⚠️ Task 9 auto-silence 同坑须沿用 silence.sh** |
-| 6 Runbook + runbook_url | 待 | |
+| 6 Runbook + runbook_url | ✅ 完成 | `a92d6bd`；6 篇 raw URL 全 200 from pod（AC-US3 ✓）；M14a stub 实为 template.tmpl L25 非规则注解；23 alert 加注解 ArgoCD 已同步；模板渲染 `.Annotations.runbook_url`；**origin/main 已推到 a92d6bd**（Runbook 例外）|
+
+### Task 6 详情
+
+- **subagent 跑完但报告丢失**（classifier 不可用），controller 完整接管验证——所有关键产出独立复验通过。
+- **M14a stub 实际位置**（Step 1 核验结论）：在 **webhook 模板** `deploy/components/webhook-dingtalk/template.tmpl` L25（`📖 **Runbook**: https://runbook.example.com/runbook/{{ .Labels.alertname | lower }}`），**不是** rule 注解（4 个 rule 文件 Task 6 前无 runbook_url）。改前值（teardown 用）：template.tmpl L25 stub URL；3 个 rule 文件无注解；slo-recording 无 alert 无需改。
+- **Runbook 内容**：`docs/runbook/` 7 文件 257 行（_template + not-ready/crashloop/oom/pod-pending/control-plane/meta-monitoring）。control-plane 含「kind 单 master 不可注入，3 master 生产处置」注记（受控偏离①）。commit `fae34c8`。
+- **AC-US3 实测**：6 篇 raw URL 从 kind pod wget 全 200（`raw.githubusercontent.com` 匿名公网可达，不依赖 Grafana）✓。
+- **runbook_url 接线**：3 个 rule 文件 23 条 alert 加注解（core 9 + capacity 6 + monitoring-self 8；slo-recording 纯 recording 无需）。commit `a92d6bd`。re-sync 裸仓后 ArgoCD 同步到集群（抽查 KubeWorkerNodeNotReady → not-ready.md raw URL ✓）。
+- **webhook 模板**：template.tmpl 改为渲染 `{{ .Annotations.runbook_url }}`（L25 Runbook 字段 + L62 默认 content 模板 markdown 链接）；live templates CM 重建（6 处引用）；webhook pod 04:22Z 重启（新模板已加载）。⚠️ Phase C 坑「reload 不重载 templates」——CM 更新后须重启 pod（delete pod 而非 rollout restart，避免 ArgoCD drift）。
+- **github push（Runbook 例外）**：`git push origin HEAD:main` 已推，origin/main = `a92d6bd`（Phase F 至今全部 commit 上 github main——Runbook raw URL 硬需求，plan D-1/D-2/D-3 授权；此后 worktree 分支与 origin/main 同步推进）。
+- **assert-runbook-url.sh** 已写（含 330s 全触发逻辑，留验收门/Task 9 用）；本次只验 wiring（raw 200 + 注解在位 + 模板引用），全卡片触发 defer Task 9。
+- **subagent 遗留**：assert-runbook-url.sh chmod +x 未提交 → controller 补 commit。
+- **改的资源**（teardown 用）：修改 3 rule 文件（+注解，ArgoCD 管，回滚 = checkout 7c97e94 版 + re-sync）+ template.tmpl（stub→真渲染，手动管）+ templates CM（重建）；新建 docs/runbook/ 7 文件 + assert-runbook-url.sh。
 | 7 oncall CM + 值班手册 | 待 | |
 | 8 verify-all 06 对齐 | 待 | |
 | 9 MTTD 全量 4类×5 | 待 | |

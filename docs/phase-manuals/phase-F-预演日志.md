@@ -130,6 +130,15 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **baseline.txt 偏离**：plan 说「同步新检查项基线」，但 baseline.txt 实为 **Prometheus 故障时的资源水位参考**（kubectl top / pod 数 / WSL 内存，2026-07-08 数据），**不是检查项清单** → 无需同步检查项。不动它。
 - **⚠️ Task 9 命名坑（必须修）**：plan measure-mttd-batch.sh 的 `ALERT[pod-pending]=KubePodPending`，但**实际 alert 名是 `KubePodNotReady`**（06 §3.11.3 + 实测规则名）。Task 9 须改映射 `pod-pending→KubePodNotReady`。inject-fault.sh 的 pod-pending 注入对应这条规则。
 - **改的资源**（teardown 用）：core-rules.yaml +3 alert（ArgoCD 管，回滚 = checkout b758564 前 + re-sync）；verify-all.sh +1 检查段。规则总数 23→26 alerting。
-| 9 MTTD 全量 4类×5 | 待 | |
+| 9 MTTD 全量 3类×5 | 🔄 长跑中 | 脚本 `3baf5cc` + smoke 过；**受控偏离⑤（用户决策）**：oom 类 kind 不可触发（containerd cgroupv2 上报 Error 非 OOMKilled，规则匹配 0 series）→ 只跑 not-ready/crashloop/pod-pending ×5；oom 改验规则在位+评估无错（已验：health=ok failures=0）；登记 **I-2 生产必验** |
+
+### Task 9 详情（编写+smoke 段）
+
+- **SDD subagent**（`3baf5cc`）：`deploy/verify/measure-mttd-batch.sh`（N=/TYPES=/WORKER= env，trap 兜底）+ 顺带修 inject-fault.sh oom 注入 bug（原 awk O(n²) 永不 OOM → 指数翻倍真实 memcg OOM）。
+- **关键修正**（plan 错处，全注入）：`pod-pending→KubePodNotReady`（非 KubePodPending）；auto-silence 用 silence.sh（非 broken `get --raw -X POST`）；measure-mttd.sh 输出 `MTTD（单次, <alert>）= <n>s`（ANSI+中文括号）解析 `grep '单次' | grep -oE '[0-9]+s' | head -1 | tr -dc 0-9`；未送达 exit 0 仍 → 靠输出行有无判送达；同类连跑等上一轮 ALERTS 归零（否则 AM repeat_interval 吞通知假 FAIL）。
+- **重大发现（I-2）**：`KubeContainerOOMKilled` 在 kind **结构上不可触发**——containerd v2.2.0/cgroupv2 对 memcg OOM 上报 `reason=Error` 非 `OOMKilled`（crictl 实证；controller 复验：全集群 KSM last_terminated_reason = Unknown/Error/Completed，零 OOMKilled）。规则匹配 0 series = 死规则（真实 OOM 也不响）。**用户决策（AskUserQuestion）**：比照 control-plane 受控偏离⑤——MTTD 跑 3 类，oom 验规则在位+评估无错（✓ health=ok lastError 空 failures=0），**生产割接前必验生产 containerd 上报 OOMKilled**（与 I-1 dashboard 假绿并列必修/必验清单）。
+- **smoke**：not-ready 单跑 MTTD=449s 送达率 100%（解析/汇总/还原全对，3 节点 Ready 无残留）；⚠ 单次额外开销 149s>60s 门（节点 ~50s NotReady 爬坡+KSM scrape+group_wait），**等 5 样本中位再判**。
+- oom smoke 送达率 0%（真实，根因如上环境级）——正是这个 smoke 暴露了 I-2。
+- **全量长跑**：`TYPES="not-ready crashloop pod-pending" N=5` background ~3.2h，结果 `/tmp/mttd-batch-result.log`。跑期间**不动集群**（Task 10/11 等它完成，故障注入互斥）。
 | 10 recover 三场景 | 待 | |
 | 11 M12 Ingress | 待 | |

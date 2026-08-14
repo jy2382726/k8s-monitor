@@ -92,7 +92,7 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **改的资源**（teardown 用）：新建 Application `monitoring-rules`（ns argocd，delete 即可）；4 个 PrometheusRule **管理权转移**（手 apply → ArgoCD 管，tracking 注解）。teardown 还原手 apply：删 Application + 重 apply 4 rule（或保留 Application 关 selfHeal）。
 | 3 webhook-dingtalk Application | ✅ 完成 | `455c006`；ArgoCD 管 Deploy+Service（2 资源）；manifest 实测只 2 段（templates CM 是 Phase C 手动设计，未扩张）；Secret/CM 维持手动；webhook 仍 Ready |
 | 4 sms-provider NoOp | ✅ 完成 | `7071b25`；NoOp 端点 3/3 稳定返 JSON；busybox nc 实测修 plan 3 处 bug（-q 不支持/-w 空窗/body 未送）；ArgoCD 管 Deploy+Service；新源文件须 commit+re-sync **先于** apply |
-| 5 silence.sh | 待 | |
+| 5 silence.sh | ✅ 完成 | `e3ded06`；3 态断言独立复现通过（active→suppressed→active）；实测修 plan 4 处（get --raw 不能 POST / silences 单对象非数组 / DELETE 404 改 amtool / date -d +30m）；**⚠️ Task 9 auto-silence 同坑须沿用 silence.sh** |
 | 6 Runbook + runbook_url | 待 | |
 | 7 oncall CM + 值班手册 | 待 | |
 | 8 verify-all 06 对齐 | 待 | |

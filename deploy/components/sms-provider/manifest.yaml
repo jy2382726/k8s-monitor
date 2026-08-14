@@ -1,0 +1,40 @@
+# M13 SmsProvider NoOp 占位（二期接真实短信/电话，CLAUDE.md §4 Non-Goals）
+# 告警→SMS 通道接线点：HTTP 端点返 NoOp，证明走线通；二期替换为真实 SmsProvider 实现。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sms-provider-noop
+  namespace: monitoring
+  labels: {app.kubernetes.io/name: sms-provider-noop}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: sms-provider-noop}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: sms-provider-noop}}
+    spec:
+      containers:
+        - name: noop
+          image: busybox:1.38.0   # 已预灌
+          command: [sh, -c]
+          args:
+            - |
+              echo '{"status":"noop","message":"SmsProvider 一期 NoOp，二期接入（CLAUDE.md §4）"}' > /tmp/resp
+              while true; do
+                # 占位 HTTP：用 busybox nc 起 8080，永远返 NoOp JSON
+                # 预演-tune（实测修正 plan verbatim 两处）：
+                #   ① -q 1 → -w 2：busybox:1.38.0 nc 无 -q 选项（nc -h 不含 -q，报 "punt!"）；
+                #     -w 2（read timeout 2s）实测等价——client 读走 body/断开后 nc 退出，loop 重新 listen。
+                #   ② 末尾追加 `; cat /tmp/resp`：plan verbatim 的 printf 只发 header+Content-Length，
+                #     body 从未送出 → client "connection closed prematurely"。追加 cat 把 body 拼进同一管道。
+                ( printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n' "$(wc -c </tmp/resp)"
+                  cat /tmp/resp ) | nc -l -p 8080 -w 2 >/dev/null 2>&1 || sleep 1
+              done
+          ports: [{containerPort: 8080, name: http}]
+          resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 50m, memory: 32Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: sms-provider-noop, namespace: monitoring}
+spec:
+  selector: {app.kubernetes.io/name: sms-provider-noop}
+  ports: [{name: http, port: 8080, targetPort: http}]

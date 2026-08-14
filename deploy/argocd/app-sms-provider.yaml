@@ -1,0 +1,22 @@
+# Phase F M13：ArgoCD 接管 sms-provider NoOp 占位（告警→SMS 通道接线点，二期接真实短信）
+# 管理范围：manifest.yaml 内的 Deployment + Service（structural 资源）
+# 一期不接 AM、不真实发信（CLAUDE.md §4 Non-Goals）；二期替换 Deployment 实现并增 sms receiver
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sms-provider
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git://172.20.0.1/k8s-monitor.git   # D-6 本地裸仓（git daemon @ 172.20.0.1:9418）
+    targetRevision: main
+    path: deploy/components/sms-provider
+    directory:
+      include: manifest.yaml          # 只管 Deployment/Service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=false]

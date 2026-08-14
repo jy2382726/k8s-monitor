@@ -119,3 +119,33 @@ spec:
             runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/crashloop.md"
             summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} 副本不足"
             description: "可用副本与期望不符且 10m 未变化（排除滚动更新中）。"
+        - alert: KubeStatefulSetReplicasMismatch
+          expr: |
+            kube_statefulset_status_replicas_ready != kube_statefulset_status_replicas
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/crashloop.md"
+            summary: "StatefulSet {{ $labels.namespace }}/{{ $labels.statefulset }} 就绪副本不足"
+            description: "ready 副本与期望不符（06 §3.11.3 工作负载层，Phase F 补齐）。"
+        - alert: KubeDaemonSetNotScheduled
+          expr: |
+            kube_daemonset_status_number_misscheduled > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/crashloop.md"
+            summary: "DaemonSet {{ $labels.namespace }}/{{ $labels.daemonset }} 有 misscheduled Pod"
+            description: "DaemonSet 存在错误调度副本（06 §3.11.3 工作负载层，Phase F 补齐）。"
+        - alert: KubeJobFailed
+          expr: |
+            kube_job_failed == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/crashloop.md"
+            summary: "Job {{ $labels.namespace }}/{{ $labels.job_name }} 失败"
+            description: "Job 执行失败（06 §3.11.3 工作负载层，Phase F 补齐）。"

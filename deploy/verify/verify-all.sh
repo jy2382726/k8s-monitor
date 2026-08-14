@@ -60,6 +60,23 @@ check "Prometheus ServiceMonitors exist" \
 # L3: 功能
 check "PrometheusRule: KubeWorkerNodeNotReady 已被 Prometheus 加载" \
   "kubectl --request-timeout=10s get --raw '/api/v1/namespaces/monitoring/services/kube-prometheus-stack-prometheus:9090/proxy/api/v1/rules' | grep -q KubeWorkerNodeNotReady"
+
+# Phase F M15（L0 RED-first）：06 §3.11.3 一期核心告警规则清单逐条在位
+# （KubeNodeNotReady 按 Phase A 拆分为 Worker/Master/Multiple 三条，06 §3.4 注记）
+RULES_JSON_06=$(kubectl --request-timeout=10s get --raw '/api/v1/namespaces/monitoring/services/kube-prometheus-stack-prometheus:9090/proxy/api/v1/rules' 2>/dev/null)
+core_missing=""
+for _r in KubeWorkerNodeNotReady KubeMasterNodeNotReady MultipleWorkerNodesNotReady \
+          KubeNodeDiskPressure KubeNodeMemoryPressure \
+          KubePodCrashLooping KubePodNotReady KubeContainerOOMKilled \
+          KubeDeploymentReplicasMismatch KubeStatefulSetReplicasMismatch \
+          KubeDaemonSetNotScheduled KubeJobFailed \
+          KubePersistentVolumeFillingUp NodeCPUUsageHigh NodeMemoryUsageHigh \
+          KubeAPIServerDown KubeEtcdInsufficientMembers; do
+  echo "$RULES_JSON_06" | grep -q "\"name\":\"$_r\"" || core_missing="$core_missing $_r"
+done
+[ -n "$core_missing" ] && echo "  [06 对齐] 缺:$core_missing"
+check "06 §3.11.3 核心告警规则清单已加载（17 名，Phase A 拆分）" \
+  "[ -z \"$core_missing\" ]"
 check "Alertmanager: route 树 + severity 分流 + watchdog 独立 + inhibit（Phase B）" \
   "deploy/verify/am-route-check.sh"
 check "prometheus-webhook-dingtalk: Pod Ready + Service:8060 + healthy（Phase C）" \

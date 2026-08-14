@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-rules
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git://172.20.0.1/k8s-monitor.git   # D-6 本地裸仓（git daemon @ 172.20.0.1:9418）
+    targetRevision: main
+    path: deploy/components
+    directory:
+      include: prometheusrule-*.yaml      # 只 sync 4 个 PrometheusRule，不碰 values/dashboard
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=false]

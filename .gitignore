@@ -57,6 +57,13 @@ deploy/verify/*
 !deploy/verify/self-mon-check.sh
 !deploy/verify/slo-check.sh
 !deploy/verify/assert-dashboard.sh
+# Phase F GitOps + 紧急操作 + M12/M14b 断言
+!deploy/verify/assert-argocd-sync.sh
+!deploy/verify/silence.sh
+!deploy/verify/assert-silence.sh
+!deploy/verify/measure-mttd-batch.sh
+!deploy/verify/assert-runbook-url.sh
+!deploy/verify/assert-m12-ingress.sh
 !**/.gitkeep
 
 # ---- 日志 / 临时 / 备份 ---------------------------------------

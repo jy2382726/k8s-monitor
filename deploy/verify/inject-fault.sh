@@ -77,7 +77,10 @@ cleanup_crashloop(){ kubectl -n "$FAULT_NS" delete pod fault-crashloop --ignore-
 
 # ---------- oom ----------
 inject_oom() {
-  info "部署 OOM Pod（awk 无限拼字符串撑爆 32Mi limit）"
+  # ⚠️ Phase F Task 9 实测修正：原 `a=a "x"`（逐字节追加）是 O(n²) 复制，busybox awk 跑 5min 仅 2Mi
+  #   永远到不了 32Mi limit → KubeContainerOOMKilled 永不 fire（Phase C 遗留 bug，实测 993m CPU + 2Mi mem）。
+  #   改 `a=a a`（指数翻倍）→ ~25 次迭代即毫秒级撞 32Mi limit 真实 OOMKilled。
+  info "部署 OOM Pod（awk 指数翻倍字符串撑爆 32Mi limit）"
   kubectl -n "$FAULT_NS" apply -f - <<'YAML' >/dev/null
 apiVersion: v1
 kind: Pod
@@ -87,7 +90,7 @@ spec:
   containers:
     - name: fault-oom
       image: busybox:1.38.0
-      command: ["sh","-c","awk 'BEGIN{while(1)a=a \"x\"}'"]
+      command: ["sh","-c","awk 'BEGIN{a=\"x\";while(1)a=a a}'"]
       resources:
         limits: {memory: 32Mi}
 YAML

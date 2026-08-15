@@ -169,4 +169,13 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **场景③ netns wedge**：rollout argocd-redis 21s 起，**wedge 未复现**（kind#2045 非必现）→ recover 幂等通过 → 23/0。**保留说明**：本场景实际验证的是幂等性+正常 rollout 不被误伤；wedge 自愈路径以场景① 的 L1 真实走通为等效证据。用户复现时同样处理。
 - recover.sh 无新缺口；无文件改动无 commit。
 - **AC-NFR-03 判定：过**（三场景各 verify-all 实际输出 23/0，非 recover 自报）。
-| 11 M12 Ingress | 待 | |
+| 11 M12 Ingress | ✅ 完成 | `dab4bcd`；alertmanager.local 新建 Ingress 200；**受控偏离**：argocd.local 已被 Helm 管现存 Ingress 占用（backend 80 明文）不重建（plan verbatim 会双 backend 502）；whitelist 实测生效；assert BASE=localhost |
+
+### Task 11 详情
+
+- **SDD subagent** DONE_WITH_CONCERNS（合理偏离），controller 复验两 host 200 + 现存 Ingress 事实成立。
+- **Step 1 现状与 plan 假设差异大**：ingress-nginx **无 NodePort service**（controller hostNetwork + hostPort 80/443 @ control-plane，kind extraPortMappings 宿主 80）；可达路径 = `http://localhost/`（与 verify-all echo 检查同路径），assert BASE 写死 localhost。
+- **受控偏离（argocd 不重建）**：host `argocd.local` 已被 Helm release 管的 `argocd-server` Ingress 占用（39d，backend port 80 明文）。plan verbatim 再建同 host 同 path 会双 backend 轮询（80 明文 vs 443 TLS）→ 间歇 502。且 plan 的 backend-protocol:HTTPS+443 无必要（argocd-server svc 80 即明文）。ArgoCD 可达性由 assert 走现存 Ingress 断言（200 ✓）。
+- **alertmanager.local**：新建 Ingress（whitelist 10/8+172.16/12+192.168/16）→ 200；进 controller pod 核实 nginx.conf 的 allow/deny 生效（本地源 IP 落 172.20.0.0/16 命中 allow，无 403）。
+- **改的资源**（teardown 用）：新建 Ingress `alertmanager`（monitoring ns，delete 即还原）；argocd 侧无新建。
+- plan v1.2 应补记：Task 11 的 NodePort 假设不成立（hostPort 模式）+ argocd 不重建偏离。（见下 commit）

@@ -1,6 +1,6 @@
 <!--
 元信息（非提示词正文，复制时从此行下方开始）
-- 用途：Phase F（GitOps + 收尾 = MVP done 最终门）提示词集。本文件落 **提示词②（plan = 闭环① writing-plans）+ 提示词③（agent 预演 = 闭环②）**；提示词④⑤（定稿手册 / teardown+用户复现）待预演跑通后按 Phase E 模板（docs/phase-prompts/phase-E-plan-提示词.md）整理。复制某条提示词时，从对应 `# 提示词N` 标题行开始（跳过本 HTML 注释）。
+- 用途：Phase F（GitOps + 收尾 = MVP done 最终门）提示词集。本文件落 **提示词②（plan = 闭环① writing-plans）+ 提示词③（agent 预演 = 闭环②）+ 提示词④（定稿手册 = 闭环③，预演跑通后已整理）**；提示词⑤（teardown + 用户复现 = 闭环④⑤）待用户复现前整理。复制某条提示词时，从对应 `# 提示词N` 标题行开始（跳过本 HTML 注释）。
 - 编号约定：docs/14 §6 提示词①（阶段切分，配合 brainstorming）**一次性，已 done**（`docs/superpowers/specs/2026-07-10-phase-breakdown-design.md` 即其产物）；**每个 Phase 从 提示词② 起**（② plan / ③ 预演 / ④ 手册 / ⑤ teardown+复现）。闭环编号（双轨验收 5 步）与提示词号差一：提示词②=闭环①（plan）→ 提示词③=闭环②（预演）→ 提示词④=闭环③（手册）→ 提示词⑤=闭环④⑤（teardown+复现）。
 - 来源：基于 docs/14 §6 提示词② 通用模板，填 Phase F 范围（M11 GitOps + M13 SmsProvider NoOp + M14b Runbook/值班手册/演练 + M15 全量演练/MTTD/baseline 对齐，横切 M12 Ingress 收尾）+ 前序实测教训。
 - 不改原文档：docs/14 §6 通用模板不动，本文件是 Phase F 专用副本。
@@ -181,6 +181,56 @@ plan 标注了若干 plan 阶段不可知、需预演实测调的点，预演实
 
 ---
 
-# 提示词④⑤ —— 待预演跑通后整理
+# 提示词④ —— 定稿 Phase F 操作手册（闭环③，预演成功后）
 
-- **提示词④（定稿手册，闭环③）/ 提示词⑤（teardown + 用户复现，闭环④⑤）**：待 Phase F 预演（闭环②，即上文提示词③）跑通后，按 `docs/phase-prompts/phase-E-plan-提示词.md` 的④⑤ 模板整理（结构一致，填 Phase F 预演实测教训）。
+基于 Phase F 预演产出的【草稿 `docs/phase-manuals/phase-F-操作手册-草稿.md`（1016 行，§0-17，预演收尾 subagent 已补全 Task 9-11 + 验收门）】+【预演日志 `docs/phase-manuals/phase-F-预演日志.md`】+【MTTD 数据 `docs/phase-manuals/phase-F-MTTD-数据.md`】，定稿成最终可复现手册。手册格式参考 `deploy/开关机操作.md` 风格；完整说明见 docs/14 §3.3。
+
+> **预演状态（2026-08-15）**：12/12 Task + 收尾全过，**9 AC 全过 = agent 预演技术门通过**。最终 sweep：verify-all 23/0 + 3 Application Synced/Healthy + 双 Ingress 200 + 6 篇 raw URL 200。worktree 提交链 `ce178d7`→`bcf74d6`（裸仓 main 已同步，ArgoCD 视图一致）；origin/main 停在 `a92d6bd`（Runbook 例外 push）——**定稿前先合并 main + 统一 push origin**（Phase D/E 惯例），否则用户 clone 拿不到 F 文件。
+
+【定稿文件】**另存** `docs/phase-manuals/phase-F-gitops-final-操作手册.md`（草稿 `-草稿.md` **保留不覆盖**，供用户复现失败时回看 agent 原始记录）。
+
+【定稿核心：agent 预演视角 → 用户操作视角】
+草稿已按用户视角起草（预演收尾 subagent 直接以用户视角写），定稿重点是**核对补齐 + 去残留**：
+- **删**（若残留）：subagent 派发 / 两段 review / RED-first / "controller 复验" / "取证 subagent" 等 agent 工作流叙述
+- **保留**：每步命令 + 预期输出 + 排障 + teardown
+- Phase F 文件预演已 commit（合并 main 后用户 clone 即有）：`deploy/local-git-mirror.sh` + `deploy/argocd/app-{monitoring-rules,webhook-dingtalk,sms-provider}.yaml` + `argocd-deployer-rbac.yaml` + `deploy/components/sms-provider/` + `m12-ingress-am-argocd.yaml` + `deploy/verify/{assert-argocd-sync,silence,assert-silence,measure-mttd-batch,assert-runbook-url,assert-m12-ingress}.sh` + measure-mttd.sh 修复版（≥`8aa6796`）+ verify-all 06 对齐项 + `docs/runbook/` 7 篇 + `docs/oncall-手册.md` → 手册**不重写文件内容**，只列调用命令
+
+【手册结构（0-5，对齐 docs/14 §3.3）】
+
+**0. 前置凭据**：**无新凭据**（F 不建 Secret）。但依赖前序在位：`dingtalk-credentials-main/watchdog` + `webhook-dingtalk-config`（Phase C）+ `oncall` CM（Phase C 建，F 扩展）。⚠️ 主仓须 **public**（Runbook raw URL 匿名可达，AC-US3；用户已改，核对 `gh repo view jy2382726/k8s-monitor --json visibility` = PUBLIC）。
+
+**1. 前置状态**：阶段开始态 = Phase A-E 已完成 + F 未部署。核对：4 个 PrometheusRule（手 apply）/ 0 个 ArgoCD Application / 0 个 AlertmanagerConfig / webhook-dingtalk 裸 Deployment / `verify-all` **22/0**（注意：F 完成后是 23 项——06 对齐项是 F Task 8 加的，开始态没有）。开机后 verify-all 若 ArgoCD NodePort 30080 FAIL = 瞬时 worker wedge → `kubectl -n kube-system rollout restart ds kindnet kube-proxy` 修到 22/0 再开始（预演实测）。
+
+**2. 步骤**（草稿 §3-§15 已按 Task 0-11 展开，定稿核对每步命令 + 预期输出完整）：
+- 🔥 **Task 0 裸仓 + re-sync 机制是全阶段地基**：`./deploy/local-git-mirror.sh` 起 daemon（每次开机/关机后**必须重跑**——daemon 是 WSL 进程随关机死）；改任何 ArgoCD 管的文件后必跑 `git push /srv/git/k8s-monitor.git HEAD:main`（权威 re-sync；**新源文件先 commit+re-sync 再 apply Application**，否则 ComparisonError）
+- Task 1-4（RBAC + 3 Application）：apply 后 automated syncPolicy ~10s 自动 reconcile（argocd CLI 未装也不用装）；断言 `./deploy/verify/assert-argocd-sync.sh <app>`（monitoring-rules 传规则数阈值，**当前 26** alerting，或现场取数）
+- Task 5（silence.sh）：直接可用，AM API 四坑已封装进脚本
+- Task 6（Runbook）：`git push origin main`（真 push github——raw URL 硬需求）+ 4 rule 文件加注解 + 模板渲染 + **重建 templates CM 后 delete webhook pod**（v2.1.0 reload 不重载）
+- Task 7（oncall CM）：🔥 **扩展不替换**——保留 oncall.yaml 嵌套结构（primary/backup phone 是 assemble-webhook-config.sh 的 awk 解析目标），只追加 rotation/escalate；平铺 5-key 结构（plan 原文）会弄坏 @人渲染
+- Task 8（verify-all 06 对齐）：RED（缺 3 条工作负载规则）→ 补规则 → re-sync → 等 ArgoCD sync + **等 ~1min**（Prometheus 全规则 reload 后 SLO 检查有 lookback-delta 瞬时假 FAIL 窗口）→ 23/0
+- Task 9（MTTD）：`TYPES="not-ready crashloop pod-pending" N=5 ./deploy/verify/measure-mttd-batch.sh 2>&1 | tee /tmp/mttd-batch-result.log`（~3.1h，宿主机全程在线，中断整轮重跑）；脚本须 ≥`8aa6796`（旧版 T_detect 被 resolved 卡片污染，数字 <for 即假）
+- Task 10/11：按草稿（含「verify-all 实际输出为准，recover.sh 自报不算」纪律）
+
+**3. 验收**（9 AC 自验表——草稿 §16 已有，定稿核对）：
+- AC-US3：kind pod wget 6 篇 raw URL 全 200
+- AC-NFR-01：3 类×5 送达率 100% + max 430/757/682 + 链路自身开销 30-56s（**口径 = T_detect−T0'−for**，PRD §11.1 注记）；**用户复现降级：每类抽验 1 次**（`N=1 TYPES=<类>`，单次不判中位门只看送达+不爆表）
+- AC-NFR-03：recover 三场景各 verify-all 实际输出 23/0（场景③ wedge 可能不复现，场景① L1 等效，不算 FAIL）
+- verify-all **23/0**
+
+**4. 排障**（草稿各 Task 踩坑段已详，定稿汇总保留）：SDD 断言阈值 40→27→26 变化 / busybox nc 三修 / get --raw 不能 POST（silence.sh 已封装）/ KubePodNotReady 命名 / MTTD resolved 污染 / 开机链（recover→verify-all→**重跑 local-git-mirror.sh**）/ kubectl wait 开机 RBAC 未就绪等 20s / argocd.local 勿重复建 Ingress（Helm 已管，双 backend 502）
+
+**5. teardown**（F 特殊：**终态不清回**，仅服务用户复现前还原；草稿 §17 已列逐条命令）：Application×3 delete + RBAC delete + Ingress alertmanager delete + rule 文件 checkout 回 `a92d6bd~1` + re-sync + 手 apply 回 Phase E 态 + template.tmpl 回 stub + oncall CM 去 rotation/escalate + 还原验证回 **22/0**（注意是 22 不是 23——06 对齐项还原）。
+
+【定稿标准】
+- 命令可独立复制粘贴（不依赖 agent context）；**禁 TODO/占位**
+- **补全预期输出**（用户对照判断成功）
+- 预演实测数字直接入册（MTTD 表从 `phase-F-MTTD-数据.md` 抄，标注「预演实测参考值」）
+- **脱敏铁律**：手机号/token 一律占位格式
+
+【用户复现边界（降级）】
+- MTTD 全量 3.2h → **每类抽验 1 次**（N=1，看送达+不爆表，不判中位门）
+- Watchdog 1h 心跳：Phase D 已验，F 不重跑
+- oom / control-plane：受控偏离⑤①（kind 不可触发，验规则在位 + 评估无错即可）
+- 9 AC 中 AC-US2/US4/US5 前序已闭环，F 不重验
+
+定稿后停在【闭环③完成】，**不进** teardown（闭环④）/ 用户复现（闭环⑤）——那是提示词⑤。

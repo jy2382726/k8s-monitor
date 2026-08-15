@@ -159,5 +159,14 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **裸仓 `/srv/git` 幸存**（WSL 关机不丢，仅 daemon 死）。
 - **⚠️ 手册警示**：MTTD 长跑 ~3.2h **要求宿主机全程在线**；中断后须按上面步骤恢复再**整轮重跑**（样本不跨轮拼接）。第二次起跑 08-14 → 08-15 08:56 重启。
 - 第二次起跑正常（not-ready 第 1 轮 T0=08:56:27 记录 ✓）。
-| 10 recover 三场景 | 待 | |
+| 10 recover 三场景 | ✅ 完成 | 三场景全 23/0（SDD subagent）；①挂机 L1 自愈真实走通（检出 4 失败→restart kindnet/kube-proxy）②单节点幂等通过 ③wedge 未复现（幂等验证，如实记录）；AC-NFR-03 过 |
+
+### Task 10 详情
+
+- **SDD subagent** 全程，controller 复验稳态 23/0 + daemon ✓。
+- **场景① 挂机**：stop 3 节点 27s → start 后 38s 全 Ready → recover.sh **第 1 次健康检查检出 4 项失败**（非「无需恢复」——之前闭环⓰ 观察到的「自报假绿」在真实故障下不出现，只有健康时它才直通）→ 自动 L1 `rollout restart ds kindnet kube-proxy` → 23/0。**未踩 NodePort wedge 假 FAIL**（L1 正好覆盖该 quirk）。小插曲：start 后立即 `kubectl wait` 报 `nodes is forbidden`（apiserver 刚起 RBAC 未就绪）——等 20s 重试即好，**手册在 wait 前加「稍等重试」提示**。
+- **场景② 单 worker**：stop→start 仅 12s 窗口 < node-monitor-grace-period 40s → KubeWorkerNodeNotReady **未触发**（plan 预期的 firing→自愈路径未走到，窗口太短非异常，如实记录）；recover 幂等直通 → 23/0。
+- **场景③ netns wedge**：rollout argocd-redis 21s 起，**wedge 未复现**（kind#2045 非必现）→ recover 幂等通过 → 23/0。**保留说明**：本场景实际验证的是幂等性+正常 rollout 不被误伤；wedge 自愈路径以场景① 的 L1 真实走通为等效证据。用户复现时同样处理。
+- recover.sh 无新缺口；无文件改动无 commit。
+- **AC-NFR-03 判定：过**（三场景各 verify-all 实际输出 23/0，非 recover 自报）。
 | 11 M12 Ingress | 待 | |

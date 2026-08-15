@@ -17,9 +17,18 @@
 #     http_method=POST ... uri=http://prometheus-webhook-dingtalk.monitoring.svc:8060/dingtalk/dingtalk-markdown/send
 #     resp_status=200 resp_bytes_length=2 resp_elapsed_ms=144.15 msg="request complete"
 #
+# ⚠️ 校正记录 ②（Phase F Task 9 取证，2026-08-15）：
+#   原 T_detect 取「ts≥T0 的第一条 target send」——webhook 访问日志不含 alertname，
+#   批量轮转时上一轮 alert 的 resolved 卡片（AM send_resolved:true，resolve-wait ~64s +
+#   group_interval 5m flush）落在本轮 T0 之后 → 被误判为本轮首发 → MTTD < for（物理不可能）。
+#   实测 15 轮中 9 轮被污染（crashloop#2-5 / pod-pending#2-5 / not-ready#2#5）。
+#   修复：T_detect 只认 ts ≥ T0 + for 的 send（for=该 alert 防抖时限，可 MIN_WAIT 覆盖）。
+#   依据：resolved/repeat 杂散 send 在 resolve 后 ~2min 内 flush，远早于 T0+for；真实首发必 ≥ T0+for。
+#
 # 用法：./deploy/verify/measure-mttd.sh [alertname]
 #   典型：先 ./deploy/verify/inject-fault.sh not-ready k8s-monitor-dev-worker
 #         再 ./deploy/verify/measure-mttd.sh KubeWorkerNodeNotReady
+# 环境变量：MIN_WAIT  覆盖「T_detect 起测下限」（默认=目标 alert 的 for 秒数，见下）
 set -uo pipefail
 NS=monitoring
 WH_DEPLOY=prometheus-webhook-dingtalk
@@ -61,7 +70,22 @@ target_for() {
 }
 TARGET=$(target_for "$ALERT")
 
-info "[2/3] 读 T_detect（webhook 访问日志 /dingtalk/<target>/send resp_status=200，ts≥T0，取最早）"
+# MIN_WAIT：T_detect 只认 ts ≥ T0+MIN_WAIT 的 send（防上一轮 resolved/repeat 杂散 send 污染，
+# 见顶部校正记录②）。默认=目标 alert 的 for 秒数（prometheusrule-core.yaml 实测，2026-08-14）。
+for_of() {
+  case "$1" in
+    KubeWorkerNodeNotReady) echo 300 ;;
+    KubePodCrashLooping)    echo 600 ;;
+    KubePodNotReady)        echo 600 ;;
+    KubeContainerOOMKilled) echo 60  ;;
+    KubeNodeDiskPressure|KubeNodeMemoryPressure) echo 600 ;;
+    KubeDeploymentReplicasMismatch) echo 600 ;;
+    *) echo "" ;;
+  esac
+}
+MIN_WAIT="${MIN_WAIT:-$(for_of "$ALERT")}"
+
+info "[2/3] 读 T_detect（webhook 访问日志 /dingtalk/<target>/send resp_status=200，ts≥T0+MIN_WAIT=$MIN_WAIT，取最早）"
 # 取 webhook 日志里所有命中行；若 alertname 有明确 target 则按 target 定位，否则取 actioncard|markdown|default 并排除 watchdog
 if [ -n "$TARGET" ]; then
   patt="/dingtalk/${TARGET}/send resp_status=200"
@@ -71,7 +95,14 @@ else
   info "  ${Y}alertname 无映射 target，取 actioncard|markdown|default 并排除 watchdog${N0}"
 fi
 
-# 遍历命中行，解析 ts，筛 ts≥T0，取最早
+# 遍历命中行，解析 ts，筛 ts≥T0+MIN_WAIT，取最早
+# （MIN_WAIT=for：早于 T0+for 的 send 必是上一轮 resolved/repeat 杂散——webhook 日志无
+#   alertname，唯有时间窗可区分；见顶部校正记录②）
+if [ -n "$MIN_WAIT" ] && [[ "$MIN_WAIT" =~ ^[0-9]+$ ]]; then
+  min_ep=$((t0 + MIN_WAIT))
+else
+  min_ep=$t0
+fi
 t_detect=""
 best_line=""
 best_ts=""
@@ -81,14 +112,14 @@ while IFS= read -r line; do
   [ -z "$ts" ] && continue
   ep=$(date -d "$ts" +%s 2>/dev/null || echo "")
   [ -z "$ep" ] && continue
-  [ "$ep" -lt "$t0" ] && continue   # 早于注入，背景噪声，跳过
+  [ "$ep" -lt "$min_ep" ] && continue   # 早于 T0+MIN_WAIT：背景噪声 / 上一轮 resolved 卡片，跳过
   if [ -z "$t_detect" ] || [ "$ep" -lt "$t_detect" ]; then
     t_detect="$ep"; best_line="$line"; best_ts="$ts"
   fi
 done < <(kubectl -n "$NS" logs "deploy/${WH_DEPLOY}" --tail=500 2>/dev/null | grep -E -- "$patt")
 
 if [ -z "$t_detect" ]; then
-  printf "${R}✗ webhook 日志未捕获 $ALERT 的送达（target=$TARGET）行（ts≥T0=$t0）${N0}\n"
+  printf "${R}✗ webhook 日志未捕获 $ALERT 的送达（target=$TARGET）行（ts≥T0+MIN_WAIT=$t0+$MIN_WAIT）${N0}\n"
   echo "  --- 诊断：webhook 日志里近 500 行所有 dingtalk send 行 ---"
   kubectl -n "$NS" logs "deploy/${WH_DEPLOY}" --tail=500 2>/dev/null \
     | grep -E '/dingtalk/.*/send' | grep -v watchdog | tail -8

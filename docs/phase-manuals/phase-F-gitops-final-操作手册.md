@@ -1056,3 +1056,32 @@ kubectl -n monitoring get cm oncall -o jsonpath='{.data.oncall\.yaml}'   # 先�
 | 9 | `deploy/verify/measure-mttd-batch.sh` + inject-fault.sh oom 修复；T_detect 污染修复（MIN_WAIT）；MTTD 数据 `docs/phase-manuals/phase-F-MTTD-数据.md` | `3baf5cc` / `8aa6796` / `30b2282` |
 | 10 | 无文件改动、无集群残留（recover 三场景纯验证） | — |
 | 11 | `deploy/components/m12-ingress-am-argocd.yaml` + `deploy/verify/assert-m12-ingress.sh` | `dab4bcd` |
+
+---
+
+## 附：用户复现记录（闭环⑤，2026-08-15）
+
+**结果：通过 —— Phase F 阶段完成 = MVP done（kind 3 节点验收门全过）**
+
+| 验收项 | 结果 |
+|---|---|
+| verify-all 实际输出 | **23 passed / 0 failed** |
+| 3 Application | monitoring-rules / webhook-dingtalk / sms-provider 全 Synced/Healthy |
+| Prometheus 规则 | 30 条（26 alerting + 4 recording），assert-argocd-sync 30 阈值过 |
+| MTTD 抽验（降级档 N=1×3 类） | **送达 3/3 = 100%**：not-ready 397s / crashloop 735s / pod-pending 679s（与预演中位 426/709/677s 吻合；额外开销门按 T0' 口径看预演中位，已留档） |
+| oom 类 | 受控偏离⑤：规则在位 health=ok（预演已验，kind 不可触发） |
+| recover 三场景（Task 10） | 各以 verify-all 实际输出 23/0 收尾 |
+| 双 Ingress（Task 11） | alertmanager.local / argocd.local 均 HTTP 200 |
+| assert 脚本群 | argocd-sync / silence 三态 / m12-ingress 全过 |
+| Runbook（AC-US3） | L1/L2 全 PASS + 宿主机 6 篇 raw URL 全 200 + 复现当天 pod 内曾 6/6 与 4/6 混合（见偏差③） |
+| 钉钉卡片人工目视 | ✓ 含真公网 runbook_url（raw.githubusercontent.com）+ @手机号字段渲染 |
+
+**与手册/预演的偏差（均已按失败回路 (a) 修入手册）**：
+1. 开始态 verify-all 实为 **22/1**（F 版脚本在 Phase E 态必然 FAIL 06 §3.11.3）——手册 §0.2/§1.3 已修正
+2. §9 步骤① Runbook URL 验证管道命令 bug（busybox wget `-S` 首行是 TLS 提示，`head -1|grep` 永远空）——已改 exit-code 法 + 重试
+3. **kind pod → raw.githubusercontent.com 出网间歇 throttling**（时好时坏，宿主机始终 200）——手册已补判定法（宿主 curl 对照；L1/L2 过 + 宿主过 = AC-US3 判过）
+4. **teardown 复现路径**：恢复 F 版文件（`git checkout b758564/a92d6bd`）后 Task 8 的 RED 步直接 GREEN（规则随文件恢复提前同步）——手册 §17.2 尾注已记
+5. recover.sh 会把开始态的预期 RED 也当故障修一轮并误报「未果」——手册 §1.3 已补注记
+
+**复现路径**：方案 B（agent teardown 还原 Phase E 末态 → 用户照手册 §1-§15 全量走 Task 0-11）。
+**收尾人**：agent（复现记录入册 + git 收尾 + memory + 进度行）。集群留在 MVP 完整态（产品运行态）。

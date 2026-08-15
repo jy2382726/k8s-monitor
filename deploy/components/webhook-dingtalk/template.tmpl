@@ -22,8 +22,8 @@
 {{- if .Annotations.description }}
 {{ .Annotations.description }}
 {{ end }}
-📖 **Runbook**: https://runbook.example.com/runbook/{{ .Labels.alertname | lower }}   {{/* M14a stub：URL 字段在位，内容 Phase F 补（M14b） */}}
-🔍 **Grafana**: https://grafana.internal.example.com/d/k8s-monitor   {{/* 内网，次要，需 VPN */}}
+{{- if .Annotations.runbook_url }}📖 **Runbook**: {{ .Annotations.runbook_url }}
+{{ end }}🔍 **Grafana**: https://grafana.internal.example.com/d/k8s-monitor   {{/* 内网，次要，需 VPN */}}
 
 **操作建议（不依赖 UI）:**
 {{ if or (eq .Labels.alertname "KubeWorkerNodeNotReady") (eq .Labels.alertname "KubeMasterNodeNotReady") (eq .Labels.alertname "MultipleWorkerNodesNotReady") }}
@@ -59,8 +59,8 @@
 
 {{/* ---- target: dingtalk-default（info/none P2/P3 兜底，轻量 markdown）---- */}}
 {{ define "dingtalk-default.title" }}[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ end }}
-{{ define "dingtalk-default.content" }}{{ range .Alerts.Firing }}- [{{ template "severity_to_p" .Labels.severity }}] {{ .Labels.alertname }}: {{ .Annotations.summary }}（📖 {{ .Labels.alertname | lower }}）
-{{ end }}{{ range .Alerts.Resolved }}- ✅ [已恢复] {{ .Labels.alertname }}（📖 {{ .Labels.alertname | lower }}）
+{{ define "dingtalk-default.content" }}{{ range .Alerts.Firing }}- [{{ template "severity_to_p" .Labels.severity }}] {{ .Labels.alertname }}: {{ .Annotations.summary }}{{ if .Annotations.runbook_url }}（📖 [Runbook]({{ .Annotations.runbook_url }})）{{ end }}
+{{ end }}{{ range .Alerts.Resolved }}- ✅ [已恢复] {{ .Labels.alertname }}（{{ .Annotations.summary }}）
 {{ end }}{{ end }}
 
 {{/* ---- target: watchdog-health（Watchdog 心跳，独立监控健康群）---- */}}

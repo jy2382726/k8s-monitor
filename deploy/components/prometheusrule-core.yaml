@@ -23,7 +23,6 @@ spec:
           labels:
             severity: warning
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/not-ready.md"
             summary: "Worker 节点 {{ $labels.node }} NotReady"
             description: "Worker 节点 {{ $labels.node }} 已连续 5m 处于 NotReady。排查：kubectl describe node {{ $labels.node }}"
         - alert: KubeMasterNodeNotReady
@@ -34,7 +33,6 @@ spec:
           labels:
             severity: critical
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/control-plane.md"
             summary: "Master 节点 {{ $labels.node }} NotReady"
             description: "控制面节点 NotReady，集群级风险。kubectl describe node {{ $labels.node }}"
         - alert: MultipleWorkerNodesNotReady
@@ -47,7 +45,6 @@ spec:
           labels:
             severity: critical
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/not-ready.md"
             summary: "2+ worker 节点同时 NotReady"
             description: "多 worker 节点同时失联，集群容量告急。"
         - alert: KubeNodeDiskPressure
@@ -56,7 +53,6 @@ spec:
           labels:
             severity: warning
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/not-ready.md"
             summary: "节点 {{ $labels.node }} 磁盘压力"
             description: "kubelet 报 DiskPressure。排查：kubectl describe node {{ $labels.node }}；节点上 docker system df / df -h 看占用，清理镜像/日志/emptyDir。"
         - alert: KubeNodeMemoryPressure
@@ -65,7 +61,6 @@ spec:
           labels:
             severity: warning
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/not-ready.md"
             summary: "节点 {{ $labels.node }} 内存压力"
             description: "kubelet 报 MemoryPressure。排查：kubectl describe node {{ $labels.node }} 看 allocatable；kubectl top pod -A --sort-by=memory 找内存大户。"
     # === Pod / 容器层 ===
@@ -80,7 +75,6 @@ spec:
           labels:
             severity: info
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/crashloop.md"
             summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} CrashLoopBackOff"
             description: "容器 {{ $labels.container }} 持续崩溃重启。kubectl logs {{ $labels.pod }} -n {{ $labels.namespace }} --previous"
         - alert: KubePodNotReady
@@ -89,7 +83,6 @@ spec:
           labels:
             severity: info
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/pod-pending.md"
             summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} 长期 Pending/Unknown"
             description: "Pod 长期未 Running。排查：kubectl describe pod {{ $labels.pod }} -n {{ $labels.namespace }}；kubectl get events -n {{ $labels.namespace }} --sort-by=.lastTimestamp。"
         - alert: KubeContainerOOMKilled
@@ -101,7 +94,6 @@ spec:
           labels:
             severity: info
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/oom.md"
             summary: "容器 {{ $labels.namespace }}/{{ $labels.pod }}/{{ $labels.container }} OOMKilled"
             description: "容器被 OOM 终止，检查内存 limit / 内存泄漏。"
     # === 工作负载 ===
@@ -116,36 +108,5 @@ spec:
           labels:
             severity: warning
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/crashloop.md"
             summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} 副本不足"
             description: "可用副本与期望不符且 10m 未变化（排除滚动更新中）。"
-        - alert: KubeStatefulSetReplicasMismatch
-          expr: |
-            kube_statefulset_status_replicas_ready != kube_statefulset_status_replicas
-          for: 10m
-          labels:
-            severity: warning
-          annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/crashloop.md"
-            summary: "StatefulSet {{ $labels.namespace }}/{{ $labels.statefulset }} 就绪副本不足"
-            description: "ready 副本与期望不符（06 §3.11.3 工作负载层，Phase F 补齐）。"
-        - alert: KubeDaemonSetNotScheduled
-          expr: |
-            kube_daemonset_status_number_misscheduled > 0
-          for: 10m
-          labels:
-            severity: warning
-          annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/crashloop.md"
-            summary: "DaemonSet {{ $labels.namespace }}/{{ $labels.daemonset }} 有 misscheduled Pod"
-            description: "DaemonSet 存在错误调度副本（06 §3.11.3 工作负载层，Phase F 补齐）。"
-        - alert: KubeJobFailed
-          expr: |
-            kube_job_failed == 1
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/crashloop.md"
-            summary: "Job {{ $labels.namespace }}/{{ $labels.job_name }} 失败"
-            description: "Job 执行失败（06 §3.11.3 工作负载层，Phase F 补齐）。"

@@ -16,7 +16,6 @@ spec:
           labels:
             severity: "none"
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/meta-monitoring.md"
             summary: "监控心跳（Watchdog）"
             description: "每 1h 发到独立监控健康群。停止更新 = 监控系统挂了（prd §6.5 / 06 §3.10.2）。"
     - name: monitoring-self
@@ -28,7 +27,6 @@ spec:
           labels:
             severity: critical
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/meta-monitoring.md"
             summary: "Prometheus Down"
             description: "Prometheus 所有 scrape target 都不 up。⚠️ MVP 死锁：prometheus 挂→评估停→发不出，生产靠 Watchdog 兜底（决策声明 4）。"
         - alert: AlertmanagerDown
@@ -38,7 +36,6 @@ spec:
           labels:
             severity: critical
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/meta-monitoring.md"
             summary: "Alertmanager 副本不足 3"
             description: "alertmanager_cluster_members = {{ $value }}（< 3，quorum 受损）。实测 3 副本稳态=3。"
         - alert: GrafanaDown
@@ -48,7 +45,6 @@ spec:
           labels:
             severity: warning
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/meta-monitoring.md"
             summary: "Grafana Down"
             description: "Grafana 所有 scrape target 都不 up。MVP 阶段 Grafana 仅 UI 层（execute_alerts:false），down 不阻断告警链路（warning）。"
         - alert: DingtalkWebhookDown
@@ -58,7 +54,6 @@ spec:
           labels:
             severity: critical
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/meta-monitoring.md"
             summary: "prometheus-webhook-dingtalk Down"
             description: "⚠️ webhook 是通知通道，挂了告警送达也失败（靠 Watchdog/Email 兜底）。firing 可查，送达死锁（决策声明 5）。"
         - alert: NotificationFailure
@@ -68,7 +63,6 @@ spec:
           labels:
             severity: warning
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/meta-monitoring.md"
             summary: "告警通知失败 rate >0.1（webhook）"
             description: "5m 内 webhook 通知失败 rate > 0.1/s（06 行 751 量纲）。AC-US4 不验 firing（决策声明 7）。"
         - alert: RuleEvaluationFailure
@@ -77,7 +71,6 @@ spec:
           labels:
             severity: warning
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/meta-monitoring.md"
             summary: "Prometheus 规则评估失败"
             description: "5m 内出现规则评估失败（prometheus_rule_evaluation_failures_total increase>0）。查 Prometheus 日志 / Rules 配置语法。"
         - alert: MonitoringDiskFull
@@ -86,6 +79,5 @@ spec:
           labels:
             severity: warning
           annotations:
-            runbook_url: "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/meta-monitoring.md"
             summary: "monitoring PVC 用量 >85%"
             description: "⚠️ kind 上 kubelet_volume_stats 无 series（cAdvisor 不报 hostPath），规则 inactive；生产换真实 storageClass 后生效（决策声明 6）。"

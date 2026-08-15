@@ -1,12 +1,12 @@
 <!--
 元信息（非提示词正文，复制时从此行下方开始）
-- 用途：Phase F（GitOps + 收尾 = MVP done 最终门）提示词集。本文件落 **提示词②（plan = 闭环① writing-plans）+ 提示词③（agent 预演 = 闭环②）+ 提示词④（定稿手册 = 闭环③，预演跑通后已整理）**；提示词⑤（teardown + 用户复现 = 闭环④⑤）待用户复现前整理。复制某条提示词时，从对应 `# 提示词N` 标题行开始（跳过本 HTML 注释）。
+- 用途：Phase F（GitOps + 收尾 = MVP done 最终门）提示词集。本文件落 **提示词②（plan = 闭环① writing-plans）+ 提示词③（agent 预演 = 闭环②）+ 提示词④（定稿手册 = 闭环③，预演跑通后已整理）+ 提示词⑤（teardown + 用户复现 = 闭环④⑤，定稿完成后已整理）**。复制某条提示词时，从对应 `# 提示词N` 标题行开始（跳过本 HTML 注释）。
 - 编号约定：docs/14 §6 提示词①（阶段切分，配合 brainstorming）**一次性，已 done**（`docs/superpowers/specs/2026-07-10-phase-breakdown-design.md` 即其产物）；**每个 Phase 从 提示词② 起**（② plan / ③ 预演 / ④ 手册 / ⑤ teardown+复现）。闭环编号（双轨验收 5 步）与提示词号差一：提示词②=闭环①（plan）→ 提示词③=闭环②（预演）→ 提示词④=闭环③（手册）→ 提示词⑤=闭环④⑤（teardown+复现）。
 - 来源：基于 docs/14 §6 提示词② 通用模板，填 Phase F 范围（M11 GitOps + M13 SmsProvider NoOp + M14b Runbook/值班手册/演练 + M15 全量演练/MTTD/baseline 对齐，横切 M12 Ingress 收尾）+ 前序实测教训。
 - 不改原文档：docs/14 §6 通用模板不动，本文件是 Phase F 专用副本。
 - 产物路径（plan 编写后）：plan → docs/superpowers/plans/<date>-phase-F-mvp-done.md；
              手册草稿 → docs/phase-manuals/phase-F-操作手册-草稿.md；
-             手册定稿 → docs/phase-manuals/phase-F-mvp-done-操作手册.md；
+             手册定稿 → docs/phase-manuals/phase-F-gitops-final-操作手册.md；
              预演日志 → docs/phase-manuals/phase-F-预演日志.md
 - Phase F 特点：**最大阶段 + AC 最多 + MVP done 最终门**。范围横跨 4 个 M（M11/M13/M14b/M15）+ 横切 M12 收尾；验收 = 9 AC 全闭环（含前序推迟至此的 AC-US1/US3/NFR-01 统计/NFR-02/NFR-03）+ verify-all 全绿 + recover.sh 自愈。有 hard blocker OQ（OQ-1 Git 仓库位置，阻塞 M11）。MTTD 是北极星（L2 测量型，非 RED）。F 完成后集群 = MVP 完整态，不清回。
 -->
@@ -234,3 +234,65 @@ plan 标注了若干 plan 阶段不可知、需预演实测调的点，预演实
 - 9 AC 中 AC-US2/US4/US5 前序已闭环，F 不重验
 
 定稿后停在【闭环③完成】，**不进** teardown（闭环④）/ 用户复现（闭环⑤）——那是提示词⑤。
+
+---
+
+# 提示词⑤ —— teardown 还原 + 用户复现（Phase F 阶段完成判定 = MVP done）
+
+分两步：**步骤一（agent 做）** teardown 还原到阶段开始态；**步骤二（用户做）** 照定稿手册复现，跑通验收门 = 阶段完成 = **MVP done**。
+
+> **当前状态（2026-08-15，闭环③ 已完成）**：定稿手册 `docs/phase-manuals/phase-F-gitops-final-操作手册.md`（1023 行）已在 Git（`372147f`），origin/main + 裸仓 + 主仓 main 三处同步一致。集群处 **Phase F 预演终态（MVP 完整态）**：3 Application Synced + 26 alerting 规则 + 23/0。
+
+【步骤一（agent 做）—— 闭环④ teardown 还原】
+执行定稿手册 §17.2 teardown 还原清单，把集群从「Phase F 预演终态」还原到「阶段开始态 = Phase E 末态」。用 superpowers:verification-before-completion 兜底。
+
+**F 与前序阶段的关键区别：终态不清回是常态选项。** 是否执行 teardown 取决于用户复现方式，**先问用户再动手**：
+- **方案 A（不 teardown，推荐）**：集群保持 MVP 完整态，用户在 agent 预演终态之上**只做增量自验**（抽验 MTTD 单轮 + Runbook URL + assert 脚本群 + verify-all 23/0）——F 的预演终态 = 用户复现的目标态，复现意义在「关键路径可信」而非「全量重推」（12 Task 含 3.1h 长跑，全量重推性价比低且 MTTD 抽验已覆盖送达率硬门）。
+- **方案 B（teardown 后全量复现）**：照手册 §17.2 还原回 Phase E 末态（22/0），用户照手册 §1 从头走 Task 0-11。仅当用户想完整验证 GitOps 从零建链路时选。
+
+**若执行 teardown（方案 B），F 特殊注意（照手册 §17.2 逐条，此处摘要）：**
+1. 还原顺序铁律：先删管理方（`kubectl -n argocd delete application monitoring-rules webhook-dingtalk sms-provider`）再还原被管资源（删 Application **不删**被管资源，rule 须手动 apply 回前序态）。
+2. rule 文件回退 = git 单文件 checkout（`git checkout a92d6bd~1 -- deploy/components/prometheusrule-{core,capacity-controlplane,monitoring-self}.yaml`——注意 core 还要再回退 Task 8 的 +3 条，即 checkout `b758564` 前的版本）+ commit + re-sync 裸仓 + 手 apply。
+3. template.tmpl 回 stub + **重建 templates CM 后 delete pod**（不是 rollout restart，v2.1.0 reload 不重载 + 防 ArgoCD drift）。
+4. oncall CM 只删 rotation/escalate 两行（**保留嵌套原结构**——平铺会坏 awk @人解析），凭据型 CM 不删。
+5. 验证还原 = verify-all 实际输出 **22 passed / 0 failed**（**22 不是 23**——06 对齐项是 F 加的，还原后即消失）+ `kubectl -n argocd get application` 为空 + start-state diff 干净。
+6. git 层 Phase F commit **不回退**（保留历史）；git daemon 可留（M1 前进产物，复现还要用）。
+
+【步骤二（用户做）—— 闭环⑤ 用户复现】
+用户照定稿手册 `docs/phase-manuals/phase-F-gitops-final-操作手册.md` 复现（方案 A = 关键路径增量自验 / 方案 B = 从 §1 全量走）。**跑通验收门 = Phase F 阶段完成 = MVP done**。
+
+**验收门自验（照手册 §16，agent 视角预演已 9 AC 全过，用户对关键路径抽验）：**
+- verify-all：`./deploy/verify/verify-all.sh 2>&1 | tail -3` → **Summary: 23 passed, 0 failed**（读实际输出，勿信任何自报 exit code）
+- 3 Application：`kubectl -n argocd get applications` → 3 个全 Synced/Healthy
+- MTTD 抽验（降级：每类 1 次，共 ~1h）：`N=1 TYPES=not-ready ./deploy/verify/measure-mttd-batch.sh`（crashloop / pod-pending 同）→ 各 `送达 1/1（100%）`；**送达率是硬门，单次丢失即 FAIL 停下排障**；单次开销 >60s 不判门（含爬坡段，开销门看预演中位 + T0' 口径，手册 §13 表）
+- Runbook：kind pod wget 6 篇 raw URL 全 200（手册 §9 步骤①）
+- assert 脚本群：`assert-argocd-sync.sh`（3 app）/ `assert-silence.sh` / `assert-runbook-url.sh` / `assert-m12-ingress.sh http://localhost` 全过
+- 钉钉侧人工目视：任一注入触发的卡片含**真公网 runbook_url**（非 runbook.example.com stub）+ P0 @手机号字段渲染
+
+【用户复现边界（降级，agent 只答疑不代跑）】
+- **MTTD 全量 3.1h → 每类抽验 1 次**（N=1，看送达 + 不爆表，不判中位门）
+- Watchdog 1h 心跳：Phase D 已验，F 不重跑
+- oom / control-plane：受控偏离⑤①（kind 结构上不可触发，验「规则在位 + health=ok + lastError 空」即可，手册 §13）
+- AC-US2 / US4 / US5：前序阶段已用户复现闭环，F 不重验
+- 用户照手册自己操作（复制粘贴 OK），agent **不代敲/代改**；卡住时用 superpowers:systematic-debugging 协助 root-cause（**先查脚本/时序不是查集群**，memory `feedback_k8s_test_script_discipline`），不替用户操作
+- **预期内现象勿当 bug 报**：MTTD 单次开销 >60s（含爬坡段，口径见 PRD §11.1 注记）/ recover 场景③ wedge 不复现 / 场景② KubeWorkerNodeNotReady 不触发（窗口 < grace-period）/ verify-all sync 后瞬时 SLO 假 FAIL（等 1min 重跑）/ kube-proxy CrashLoop 背景噪声（可接受，memory 有案）
+
+【用户复现失败回路（docs/14 §3.3）】
+- (a) 排障/措辞问题 → 直接改定稿手册，用户从失败步重试（不重跑预演）
+- (b) 步骤/命令问题（部署逻辑变）→ 修手册 + 重跑闭环②受影响 Task 预演确认，再交用户复现
+- 回看 agent 原始记录：草稿 `phase-F-操作手册-草稿.md` + `phase-F-预演日志.md` + `phase-F-MTTD-数据.md`（三件全保留）
+
+【用户复现成功 → 阶段完成收尾 = MVP done】
+用户复现跑通后，在定稿手册末尾附「用户复现记录」：日期（2026-08-XX）+ 通过的验收门（verify-all 23/0 + 3 Application + MTTD 抽验送达 3/3 + Runbook 200 + assert 群 + 钉钉目视）+ 与手册的偏差（若有）。**Phase F 阶段完成 = 用户复现通过 = MVP done（kind 3 节点验收门全过）**（agent 预演②只证手册可信，docs/14 §3.3）。
+
+【阶段完成后】
+- worktree 分支 `worktree-worktree-phase-F-mvp-done` 收尾（F 的 commit 已在 origin/main 至 `372147f`，只需补 push 复现期间新 commit + 清理 worktree）。
+- 集群留在 **MVP 完整态**（不清回）——这就是产品运行态，生产割接从这个态出发。
+- 更新 memory：仿 `project_phase_e_preview_done` 写 `project_phase_f_mvp_done`（双轨验收 + 合并/push 记录 + 集群 MVP 完整态 + 下一步生产割接里程碑）。
+- 更新 `deploy/开关机操作.md` 顶部「当前进度」行（Phase F 完成 / MVP done）。
+- **MVP done 之后的独立里程碑 = 生产割接（28 节点集群）**，非本阶段范围；割接前必过 `docs/11-生产环境对齐清单.md`。
+
+> ⚠️ **生产割接前必修/必验（kind 验收门不含，不阻塞 MVP done，手册 §16.2）**：
+> - **I-1 必修**：`cluster:nodes_ready:ratio` recording rule 假绿（dashboard 节点 Ready 率与告警不一致）
+> - **I-2 必验**：生产 containerd 是否上报 OOMKilled（kind 上报 Error → `KubeContainerOOMKilled` 死规则，真实 OOM 不告警）
+> - blackbox reachability 盲区：二期（「pod 健康 but 网络不可达」零告警）

@@ -1,0 +1,34 @@
+# M12 Ingress（L1）：Alertmanager 域名可达
+#
+# ⚠️ 受控偏离（vs plan Task 11 verbatim）：
+# plan 原文还包含 argocd.local 的 Ingress，但实查发现 argocd.local 已被 Helm release
+# `argocd` 的 Ingress `argocd-server`（backend port 80，无 backend-protocol 注解）占用，
+# 且实测 HTTP 200 可达。若再建同 host 同 path 的 Ingress，ingress-nginx 会把两条
+# backend 合并轮询（80 明文 vs 443 需 TLS），导致间歇性 502。
+# → ArgoCD 不新建，维持 Helm 管理的现有 Ingress（argocd/argocd-server）。
+#
+# 可达路径实测：ingress-nginx controller 为 hostNetwork + hostPort 80/443
+# （control-plane 节点，无 NodePort service），宿主机 http://localhost/ 直接可达
+# （与 verify-all.sh 的 echo-server 检查同路径）。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  annotations:
+    # VPN 内网段白名单；本机 kind extraPortMappings 经 docker bridge（172.20.x）访问，
+    # 源 IP 落在 172.16.0.0/12 段内，localhost 验证不被拒
+    nginx.ingress.kubernetes.io/whitelist-source-range: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: alertmanager.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kube-prometheus-stack-alertmanager
+                port:
+                  number: 9093

@@ -555,6 +555,14 @@ kubectl -n monitoring wait --for=condition=ready pod -l app.kubernetes.io/name=p
 
 期望：raw URL 200 + 注解在位 + 模板引用（`raw.githubusercontent.com/.*/docs/runbook/` 出现在 webhook 日志卡片内容里）。
 
+> ⚠️ **L3 段（公网可达）间歇抖动是常态（复现实测 2026-08-15）**：kind pod →
+> raw.githubusercontent.com 出网被间歇 throttling——时好时坏（同日实测从 6/6 全过劣化到
+> 连续超时，而宿主机 curl 直连/代理始终 200）。**判定法**：L1（源文件）+ L2（集群态）全 PASS
+> 即 wiring 完整；L3 只依赖 pod 出公网，**FAIL 时用宿主机对照**（`curl <URL>` 200 = URL 与
+> 主仓 public 无问题，纯 pod 出网抖动）→ **择机重跑 L3 即可，不阻塞后续 Task**（Task 7 起不
+> 依赖它）。另注意脚本 `set -e`：L3 某篇 wget 超时会以 FAIL 结尾退出（trap 自动清 pod），
+> 不是"卡死"。
+
 ### 踩坑
 
 - **M14a stub 的真实位置**在 **webhook 模板** `template.tmpl` L25（`runbook.example.com` 链接），

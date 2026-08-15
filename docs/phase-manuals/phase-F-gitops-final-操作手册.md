@@ -492,17 +492,27 @@ Runbook 7 文件（`fae34c8`：_template + not-ready/crashloop/oom/pod-pending/c
 
 ```bash
 # ① 验 7 篇 Runbook raw URL 从 kind pod 公网匿名可达（AC-US3）
-kubectl run rbtest --image=busybox:1.38.0 --restart=Never --command -- sleep 60
+kubectl run rbtest --image=busybox:1.38.0 --restart=Never --command -- sleep 300
 kubectl wait --for=condition=ready pod/rbtest --timeout=60s
+# ⚠️ 用 exit-code 法 + 重试：busybox wget 的 -S 输出首行是 TLS 提示不是状态行
+# （旧版 head -1|grep 管道会永远空输出）；且 pod 出公网到 raw.githubusercontent.com
+# 间歇超时（CN 网络 throttling，实测单次 ~20-50% 失败率），须重试。
 for f in not-ready crashloop oom pod-pending control-plane meta-monitoring; do
-  kubectl exec rbtest -- wget -q -S -O /dev/null --timeout=8 \
-    "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/$f.md" 2>&1 \
-    | head -1 | grep -o 'HTTP/1.1 200 OK' | sed "s|^|$f: |"
+  for try in 1 2 3 4 5; do
+    if kubectl exec rbtest -- wget -q -O /dev/null --timeout=10 \
+      "https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/$f.md" 2>/dev/null; then
+      echo "$f: 200 OK（第${try}次尝试）"; break
+    fi
+    [ $try -eq 5 ] && echo "$f: 5 次超时 ✗（连续多轮全超时才报障，偶发重试即过）"
+    sleep 3
+  done
 done
 kubectl delete pod rbtest --ignore-not-found
 ```
 
-期望：6 行 `<f>: HTTP/1.1 200 OK`。
+期望：6 行 `<f>: 200 OK（第N次尝试）`（N≤5 即可，**不要求第 1 次**——单次超时是
+网络抖动非故障；连续 2 轮 ×5 次全超时才是真问题，此时在宿主机跑
+`curl -x http://127.0.0.1:7890 <URL>` 对照：宿主代理通而 pod 不通 = 集群出网路径问题）。
 
 ```bash
 # ② 确认注解接线（23 条 alert 已带 runbook_url：core 9 + capacity 6 + monitoring-self 8；

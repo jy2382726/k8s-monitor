@@ -130,7 +130,17 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **baseline.txt 偏离**：plan 说「同步新检查项基线」，但 baseline.txt 实为 **Prometheus 故障时的资源水位参考**（kubectl top / pod 数 / WSL 内存，2026-07-08 数据），**不是检查项清单** → 无需同步检查项。不动它。
 - **⚠️ Task 9 命名坑（必须修）**：plan measure-mttd-batch.sh 的 `ALERT[pod-pending]=KubePodPending`，但**实际 alert 名是 `KubePodNotReady`**（06 §3.11.3 + 实测规则名）。Task 9 须改映射 `pod-pending→KubePodNotReady`。inject-fault.sh 的 pod-pending 注入对应这条规则。
 - **改的资源**（teardown 用）：core-rules.yaml +3 alert（ArgoCD 管，回滚 = checkout b758564 前 + re-sync）；verify-all.sh +1 检查段。规则总数 23→26 alerting。
-| 9 MTTD 全量 3类×5 | 🔄 长跑中 | 脚本 `3baf5cc` + smoke 过；**受控偏离⑤（用户决策）**：oom 类 kind 不可触发（containerd cgroupv2 上报 Error 非 OOMKilled，规则匹配 0 series）→ 只跑 not-ready/crashloop/pod-pending ×5；oom 改验规则在位+评估无错（已验：health=ok failures=0）；登记 **I-2 生产必验** |
+| 9 MTTD 全量 3类×5 | ✅ 完成 | 长跑 15/15 送达 100%（硬门✓）；⚠ 原数字 9/15 轮被 resolved 卡片污染 → 取证+离线重建（`8aa6796` 修脚本 MIN_WAIT）+ 持久化 `phase-F-MTTD-数据.md`；**口径修正（用户决策）**：开销=T_detect−T0'−for（链路自身），三类 30-56s 全过门；PRD §11.1 加注记 |
+
+### Task 9 详情（长跑+取证+重建段，收尾）
+
+- **长跑完成**（08:56-12:03，~3.1h）：3 类×5 **送达 15/15 = 100%**（硬门过，无一丢失无一爆表）。
+- **取证发现测量口径 bug**：原 measure-mttd.sh 的 T_detect（「ts≥T0 首条 target send」）在批量轮转下被**上一轮 resolved 卡片**污染（AM `send_resolved:true` + resolve-wait~64s + group_interval 5m flush 落在下一轮 T0 后；webhook 访问日志不含 alertname 无法区分）→ **9/15 轮假小**（crashloop/pending 中位 155s/208s < for=600s 物理不可能，controller 复核抓出）。
+- **取证 subagent**：证实污染（15 轮证据表，假 send 身份逐条定位）+ **离线重建全部 15 轮**（规则 T_detect=首条 ts≥T0+for 的 send）+ 修脚本（MIN_WAIT 约束，桩回放与重建逐秒一致）+ commit `8aa6796`。**未重跑注入**（原始日志全在，零集群扰动）。
+- **重建结果**：not-ready 中位 426/max 430；crashloop 709/757；pod-pending 677/682；送达 15/15。
+- **⚠ 北极星口径决策（AskUserQuestion，用户选「口径修正」）**：原口径（开销=T_detect−T0−for）三类 77-126s 均超 60s 门，但分段预算证明超的是**故障爬坡+采集周期结构性等待**（not-ready ~70s：节点 condition 爬坡 40-55s+KSM scrape 30s+Prom eval 30s），**链路自身仅 30-56s**。PRD §11.1 原文的分解式（scrape/for/group_wait/送达）本就不含爬坡段 → 加**口径注记**：`额外开销 = T_detect − T0' − for`（T0'=故障可观测时刻）。修正口径下三类全过门。
+- 数据持久化：`docs/phase-manuals/phase-F-MTTD-数据.md`（取证证据表+重建对照+分段预算，PRD 注记引用）。
+- **AC-NFR-01 判定（口径修正后）**：送达率 100% ✓ / 中位+max（430/757/682 均 <for+10min）✓ / 链路自身开销 ≤60s ✓ / oom 比照 control-plane 受控偏离⑤ ✓ → **北极星过门**。
 
 ### Task 9 详情（编写+smoke 段）
 

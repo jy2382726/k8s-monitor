@@ -140,5 +140,14 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **smoke**：not-ready 单跑 MTTD=449s 送达率 100%（解析/汇总/还原全对，3 节点 Ready 无残留）；⚠ 单次额外开销 149s>60s 门（节点 ~50s NotReady 爬坡+KSM scrape+group_wait），**等 5 样本中位再判**。
 - oom smoke 送达率 0%（真实，根因如上环境级）——正是这个 smoke 暴露了 I-2。
 - **全量长跑**：`TYPES="not-ready crashloop pod-pending" N=5` background ~3.2h，结果 `/tmp/mttd-batch-result.log`。跑期间**不动集群**（Task 10/11 等它完成，故障注入互斥）。
+
+### Task 9 长跑中断事故与恢复（2026-08-15，记进手册）
+
+- **事故**：首次长跑（08-14 16:30 起跑）期间**整机被关机**（`wsl --shutdown`）→ background 长跑随会话死、`/tmp` 全清（无部分结果可捡，本轮 0 样本损失——not-ready 第 1 轮未完成）。
+- **集群恢复良好**：开机 `docker start` 后节点由 kubelet 重启**自然还原**（3 节点 Ready、无残留故障 pod、kubelet 无 STOP、无活跃 silence）——trap 兜底 + 注入手法本身可自愈，**无残留清理负担**。
+- **环境恢复步骤**（手册用）：`recover.sh`（自报过）→ `verify-all.sh` 实测 **23/0** → **重跑 `./deploy/local-git-mirror.sh`**（git daemon 随关机死，不重启则 ArgoCD 失联）→ 抽查 ArgoCD `git ls-remote` ✓ → 重起长跑。
+- **裸仓 `/srv/git` 幸存**（WSL 关机不丢，仅 daemon 死）。
+- **⚠️ 手册警示**：MTTD 长跑 ~3.2h **要求宿主机全程在线**；中断后须按上面步骤恢复再**整轮重跑**（样本不跨轮拼接）。第二次起跑 08-14 → 08-15 08:56 重启。
+- 第二次起跑正常（not-ready 第 1 轮 T0=08:56:27 记录 ✓）。
 | 10 recover 三场景 | 待 | |
 | 11 M12 Ingress | 待 | |

@@ -1,6 +1,6 @@
 # Phase F · GitOps + 收尾 操作手册（草稿 · 用户复现版）
 
-> **版本**：草稿前半（预备段 + Task 0–8；Task 9–11 + 验收门待长跑完成后补）。
+> **版本**：草稿全本（预备段 + Task 0–11 + 验收门；Task 9–11 章节按预演长跑实测补全）。
 > **Plan**：`docs/superpowers/plans/2026-08-12-phase-F-mvp-done.md`（v1.2，含预演实测修订记录）
 > **预演日志**：`docs/phase-manuals/phase-F-预演日志.md`（每步实测输出/偏差/坑）
 > **集群**：`kind-k8s-monitor-dev`（context `kind-k8s-monitor-dev`）
@@ -14,9 +14,8 @@
 
 ### 0.1 适用范围
 
-本手册覆盖 Phase F 的 Task 0–8（GitOps 化 + 紧急操作 + Runbook/oncall + verify-all 06 对齐）。
-Task 9（MTTD 全量长跑）/ Task 10（recover 三场景）/ Task 11（M12 Ingress）/ 验收门为占位章节，
-待 agent 预演长跑完成后补全（见 §13–§15）。
+本手册覆盖 Phase F 全部 Task 0–11（GitOps 化 + 紧急操作 + Runbook/oncall + verify-all 06 对齐
++ MTTD 全量长跑 + recover 三场景 + M12 Ingress）+ 验收门判定（§16）+ 收尾/teardown（§17）。
 
 ### 0.2 开始态 = Phase E 用户复现版
 
@@ -688,40 +687,314 @@ kubectl --request-timeout=10s get --raw \
 
 ---
 
-## 13. Task 9：MTTD 全量统计（占位，待长跑完成）
+## 13. Task 9：MTTD 全量统计（M15 北极星，3 类 ×5 + oom 规则在位验证）
 
-<!-- 待长跑完成后补 -->
+**目的**：对每类故障注入 ×5 轮，测送达率（硬门 100%）/ 中位 / max / 链路自身额外开销
+（AC-NFR-01 北极星），并顺带完成 Task 6 defer 的「全卡片触发」验证。
 
-**已知事实（预演实测，复现前必读）**：
+**前置**：Task 8 过（23/0，26 alerting 规则）；开跑了就没法干别的——**长跑期间不动集群**
+（Task 10/11 等它完成，故障注入互斥）。
 
-- **受控偏离⑤（用户决策）**：`KubeContainerOOMKilled` 在 kind 环境**结构上不可触发**——
-  containerd v2.2.0 / cgroupv2 对 memcg OOM 上报 `reason=Error` 而非 `OOMKilled`，规则匹配
-  0 series。故全量只跑 **3 类 ×5**（not-ready / crashloop / pod-pending）；oom 改验
-  「规则在位 + 评估无错」（已验：health=ok、failures=0、lastError 空），并登记 **I-2
-  生产割接前必验**（生产 containerd 是否正确上报 OOMKilled，与 I-1 dashboard 假绿并列）。
-- 脚本 `deploy/verify/measure-mttd-batch.sh`（commit `3baf5cc`，env：`N=` / `TYPES=` / `WORKER=`，
-  trap 兜底 cleanup + 清 auto-silence）。
-- **长跑 ~3.2h 要求宿主机全程在线**；中断后（含 `wsl --shutdown`）无部分结果可捡，
-  **须按 §1 恢复链恢复后整轮重跑**（样本不跨轮拼接）。集群本身恢复良好（注入手法可自愈，
-  开机后节点自然还原、无残留）。
-- smoke 数据：not-ready 单跑 MTTD=449s、送达率 100%；单次额外开销 149s > 60s 门
-  （节点 ~50s NotReady 爬坡 + KSM scrape + group_wait）——**等 5 样本中位再判**。
-- alert 映射：pod-pending → **KubePodNotReady**（§11 坑 2）。
+### ⚠️ 版本前置：脚本 commit ≥ 8aa6796（必读，旧版数字是假的）
+
+原版 `measure-mttd-batch.sh` 有 **resolved 卡片污染 bug**：单次脚本 `measure-mttd.sh` 的
+T_detect 取「ts≥T0 的第一条 target send」，在批量轮转下会被**上一轮 alert 的 resolved 卡片**
+（AM `send_resolved:true` + resolve-wait ~64s + group_interval 5m flush 落在下一轮 T0 后）
+污染——webhook 访问日志不含 alertname，脚本层无法区分 firing/resolved。预演长跑 **9/15 轮
+假小**（crashloop/pod-pending 中位 155s/208s，**< for=600s 物理不可能**）。
+
+**判定法**：若你拿到的批量结果里出现 **MTTD 中位 < for 值**（如 crashloop 中位 < 600s），
+即是旧版污染——数字直接作废，**换 commit ≥ `8aa6796` 的版本重跑**（修复 = T_detect 加
+`ts≥T0+for` 约束，MIN_WAIT 排除 resolved/repeat 杂散 send）。核验脚本版本：
+
+```bash
+git log --oneline -1 -- deploy/verify/measure-mttd-batch.sh   # 期望 ≥ 8aa6796（含 MIN_WAIT 修复）
+```
+
+### 用法（全量 ~3.1h）
+
+```bash
+TYPES="not-ready crashloop pod-pending" N=5 ./deploy/verify/measure-mttd-batch.sh 2>&1 | tee /tmp/mttd-batch-result.log
+```
+
+- 全量 3 类 ×5 实测耗时 **~3.1h**（08:56–12:03）。**宿主机全程在线**：中断（含
+  `wsl --shutdown` / 关机）后 background 长跑随会话死、`/tmp` 全清，**无部分结果可捡，
+  须按 §1 恢复链恢复后整轮重跑**（样本不跨轮拼接）。预演首次长跑即被整机关机打断过。
+- 好消息：集群本身恢复无负担——注入手法可自愈（trap 兜底 cleanup + kubelet 自然还原），
+  预演中断后开机 3 节点 Ready、无残留故障 pod、无活跃 silence。
+- 脚本自管：auto-silence 背景噪声（走 silence.sh，§8 四坑已内置）→ 注入 + T0 埋点 →
+  等送达（for+ramp+60s 起测，每 20s 重试 ×8）→ cleanup → 等上一轮 ALERTS 归零（防
+  repeat_interval 吞下一轮通知）→ 每类汇总（送达率/中位/max/额外开销）。汇总另写
+  `/tmp/mttd-batch/result.txt`，逐轮日志在 `/tmp/mttd-batch/batch-*.log`。
+- **跑前开机恢复链**（若经历过挂机）：`recover.sh` → `verify-all.sh` 读实际输出确认 23/0 →
+  **重跑 `./deploy/local-git-mirror.sh`**（git daemon 随关机死）→ 抽查 ArgoCD `git ls-remote`
+  （§2.2）→ 再起长跑。
+
+### 受控偏离⑤：oom 类不跑（用户决策，kind 环境结构上不可触发）
+
+`KubeContainerOOMKilled` 在 kind **不可触发**：containerd v2.2.0 / cgroupv2 对 memcg OOM 上报
+`reason=Error` 而非 `OOMKilled`（crictl 实证；全集群 KSM `last_terminated_reason` =
+Unknown/Error/Completed，零 OOMKilled），规则匹配 0 series。这不是注入手法问题（指数翻倍
+真实打满 memcg 也不行），是容器运行时上报行为差异。oom 改验「**规则在位 + 评估无错**」：
+
+```bash
+kubectl --request-timeout=10s get --raw \
+  /api/v1/namespaces/monitoring/services/kube-prometheus-stack-prometheus:9090/proxy/api/v1/rules \
+  | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for g in d['data']['groups']:
+    for r in g['rules']:
+        if r.get('name')=='KubeContainerOOMKilled':
+            print(r['name'], r['health'], r.get('lastError',''), g.get('lastEvaluation'))"
+# 期望：KubeContainerOOMKilled ok（lastError 空）
+```
+
+预演已验：health=ok、failures=0、lastError 空。并登记 **I-2：生产割接前必验**（生产
+containerd 是否正确上报 OOMKilled，否则该规则在生产也是死规则，见 §16.2）。
+
+### 口径（AC-NFR-01 判定基准，PRD §11.1 注记）
+
+**额外开销 = T_detect − T0' − for**（T0' = 故障**可观测**时刻，非注入时刻 T0）。原因：
+T0→T0' 之间的「故障爬坡 + 采集周期」（not-ready ~70s：节点 condition 爬坡 40-55s（K8s
+NodeMonitorGracePeriod 机制，不可约）+ KSM scrape 30s + Prom eval 30s）是**结构性等待**，
+不属于告警链路自身；PRD §11.1 的分解式（scrape/for/group_wait/送达）本就不含爬坡段。
+链路自身开销 = group_wait 30s + 各周期抖动，预算 30-60s。
+
+### 本轮实测结果（预演 2026-08-15，数据重建后）
+
+> 原始批量输出被 resolved 卡片污染（见 §13 版本前置），下表为**离线重建**结果
+> （T_detect = webhook 日志首条 ts≥T0+for 的 target send；逐轮明细/取证证据表/分段预算见
+> `docs/phase-manuals/phase-F-MTTD-数据.md`）。新版脚本（≥8aa6796）跑出来应直接得到
+> 重建口径的数字。
+
+| 类型 | alert（for） | 送达 | 中位 | max | 链路自身开销* |
+|---|---|---|---|---|---|
+| not-ready | KubeWorkerNodeNotReady（300s） | 5/5 | 426s | 430s | ~56s |
+| crashloop | KubePodCrashLooping（600s） | 5/5 | 709s | 757s | ~30-56s |
+| pod-pending | KubePodNotReady（600s） | 5/5 | 677s | 682s | ~30-56s |
+
+\* 按 T0'口径分段预算（爬坡+双 30s 周期扣除后）：not-ready 126s − 结构性 ~70s ≈ 56s；
+crashloop 109s、pod-pending 77s 中扣除各自 scrape/eval 段后 30-56s。三类均 **≤60s 过门**。
+
+**北极星判定**：送达 15/15 = 100%（硬门✓，无一丢失）；max 430/757/682s 均 < for+10min
+（不爆表✓）；链路自身开销 30-56s ≤ 60s（口径修正后✓）→ **AC-NFR-01 过门**。
+
+### 用户复现降级（每类抽验 1 次）
+
+全量 3.1h 太重时降级：每类抽 1 轮（单类 ~15-25min）：
+
+```bash
+N=1 TYPES=not-ready ./deploy/verify/measure-mttd-batch.sh
+N=1 TYPES=crashloop ./deploy/verify/measure-mttd-batch.sh
+N=1 TYPES=pod-pending ./deploy/verify/measure-mttd-batch.sh
+```
+
+期望：三类各 `送达 1/1（100%）`；单次额外开销（脚本按 T0 口径打印，含爬坡段）会 >60s
+（not-ready 单跑实测 MTTD=449s、开销 149s）——**单样本不判开销门**，开销门看中位 + T0'
+口径分段（本文表）；送达率是硬门，单次丢失即 FAIL 须停下排障。
+
+**其他已知事实**：
+
+- 脚本 env：`N=`（轮数，默认 5）/ `TYPES=`（默认 4 类全跑，复现用 3 类）/ `WORKER=`
+  （not-ready 注入目标，默认自动取第一个 worker 节点）；trap 兜底 cleanup + 清 auto-silence。
+- alert 映射（脚本已内置，手写 alertname 处同样适用）：pod-pending → **KubePodNotReady**
+  （`KubePodPending` 不存在，§11 坑 2）；not-ready → KubeWorkerNodeNotReady；crashloop →
+  KubePodCrashLooping；oom → KubeContainerOOMKilled。
 
 ---
 
-## 14. Task 10：recover.sh 三场景自愈（占位，待补）
+## 14. Task 10：recover.sh 三场景自愈（AC-NFR-03）
 
-<!-- 待长跑完成后补 -->
+**目的**：验证 `recover.sh` 在「挂机恢复 / 单节点重启 / netns wedge」三场景下能把集群拉回
+verify-all 23/0。无新产物、无集群持久改动（纯破坏→自愈验证）。
 
-已知事实：recover.sh 自报不可信（verify-all.sh 永远 exit 0，§1.3）——三场景验证必须读
-verify-all **实际输出**（grep `[FAIL]` / `Summary`），不能信 recover.sh 的自报。
+**总纪律（§1.3）**：recover.sh 自报不可信（verify-all.sh 永远 exit 0）——**每个场景收尾
+必须读 verify-all 实际输出**（`grep '[FAIL]'` / `Summary` 行），不能信 recover.sh 的自报。
+
+### 场景① 挂机（stop 3 节点 → start → recover）
+
+```bash
+# ① 停 3 节点（模拟挂机）
+docker stop k8s-monitor-dev-control-plane k8s-monitor-dev-worker k8s-monitor-dev-worker2
+
+# ② 起节点；start 后立即 kubectl wait 可能报 `nodes is forbidden`（apiserver 刚起 RBAC 未就绪）
+docker start k8s-monitor-dev-control-plane k8s-monitor-dev-worker k8s-monitor-dev-worker2
+#    ↑ 若 wait 报 RBAC forbidden：等 ~20s 重试即可，不是故障
+kubectl wait --for=condition=ready node --all --timeout=120s
+
+# ③ 自愈
+./deploy/verify/recover.sh
+
+# ④ 判定（唯一标准 = 实际输出）
+./deploy/verify/verify-all.sh 2>&1 | tail -3    # 期望 Summary: 23 passed, 0 failed
+```
+
+预演实测：stop 27s → start 后 ~38s 全 Ready → recover **第 1 次健康检查检出 4 项失败**
+（注意：真实故障下 recover 的健康检查不假绿，假绿只出现在「本来就健康直通」时）→ 自动
+L1 `rollout restart ds kindnet kube-proxy` → 23/0。L1 正好覆盖 NodePort wedge quirk，
+未踩假 FAIL。
+
+### 场景② 单 worker 重启（幂等）
+
+```bash
+docker stop k8s-monitor-dev-worker
+sleep 10
+docker start k8s-monitor-dev-worker
+kubectl wait --for=condition=ready node k8s-monitor-dev-worker --timeout=120s
+./deploy/verify/recover.sh
+./deploy/verify/verify-all.sh 2>&1 | tail -3    # 期望 23/0
+```
+
+预演实测：stop→start 仅 12s 窗口 < node-monitor-grace-period 40s → `KubeWorkerNodeNotReady`
+**未触发**（不是异常，窗口太短；plan 预期的 firing→自愈路径本场景走不到，属如实记录）；
+recover 幂等直通 → 23/0。
+
+### 场景③ Pod netns wedge（幂等；wedge 可能不复现）
+
+```bash
+kubectl -n argocd rollout restart deploy argocd-redis
+kubectl -n argocd rollout status deploy argocd-redis --timeout=120s
+./deploy/verify/recover.sh
+./deploy/verify/verify-all.sh 2>&1 | tail -3    # 期望 23/0
+```
+
+预演实测：redis 21s 起来，**wedge 未复现**（kind#2045 非必现）。本场景实际验证的是
+**recover 幂等性 + 正常 rollout 不被误伤**；wedge 自愈路径以**场景① 的 L1 真实走通**
+（restart kindnet/kube-proxy）为等效证据。用户复现时同样处理：wedge 没复现不算 FAIL，
+场景① 的 L1 就是自愈路径的证明。
+
+### 判定
+
+三场景各以 verify-all 实际输出 **23 PASS / 0 FAIL** 收尾 → **AC-NFR-03 过**（预演三场景
+全 23/0）。若你的场景③ 真复现了 wedge（redis 活但 NodePort/服务不可达），recover L1 应
+能拉回——拉不回再报障。
 
 ---
 
-## 15. Task 11：M12 Ingress + 验收门（占位，待补）
+## 15. Task 11：M12 Ingress（Alertmanager / ArgoCD 域名可达）
 
-<!-- 待长跑完成后补 -->
+**目的**：给 Alertmanager / ArgoCD 配域名经 ingress-nginx 可达（M12）。产物已在 Git
+（commit `dab4bcd`）：`deploy/components/m12-ingress-am-argocd.yaml`（**只含
+alertmanager 一段**）+ `deploy/verify/assert-m12-ingress.sh`。
+
+### ⚠️ 两处受控偏离（vs plan verbatim，复现照本文不照 plan）
+
+1. **argocd.local 不重建**：host 已被 Helm release `argocd` 管的现存 Ingress
+   `argocd-server`（backend port 80 明文）占用且实测 200 可达。若照 plan 再建同 host 同
+   path 的 Ingress，ingress-nginx 会把两条 backend 合并轮询（80 明文 vs 443 TLS）→ 间歇
+   502；且 plan 的 backend-protocol:HTTPS + 443 无必要（argocd-server svc 80 即明文）。
+   ArgoCD 可达性改由 assert 走**现存** Ingress 断言。
+2. **无 NodePort**：本环境 ingress-nginx 是 **hostNetwork + hostPort 80/443 @ control-plane**
+   模式（无 NodePort service），宿主 80 由 kind extraPortMappings 映射 → 可达路径 =
+   `http://localhost/`（与 verify-all echo 检查同路径），**不是** plan 假设的 NodePort。
+
+### 步骤
+
+```bash
+# ① apply（只建 alertmanager Ingress；whitelist 内网三段 10/8+172.16/12+192.168/16，
+#    本机源 IP 落 172.20.x 命中 allow，localhost 验证不被拒）
+kubectl apply -f deploy/components/m12-ingress-am-argocd.yaml
+kubectl -n monitoring get ingress alertmanager   # 期望 HOSTS alertmanager.local
+
+# ② 断言（BASE 默认 http://localhost，两 host 都验：alertmanager 新建 + argocd 现存）
+./deploy/verify/assert-m12-ingress.sh http://localhost
+```
+
+期望：
+```
+✓ alertmanager.local 可达（HTTP 200）
+✓ argocd.local 可达（HTTP 200）
+```
+
+（200/302/401/403 都算可达；000/超时 = 不可达。）
+
+---
+
+## 16. 验收门（9 AC + verify-all + recover）
+
+> 判定表 = **agent 预演实测结论**；用户复现时照「复现法」列自验。MVP done 边界 = kind
+> 3 节点验收门全过（生产割接是独立里程碑）。
+
+### 16.1 AC 判定表
+
+| AC | 判定 | 证据 / 复现法 |
+|---|---|---|
+| AC-US1-01（卡片自包含+分级+@人） | ✅ | 卡片含真公网 runbook_url（模板渲染 `.Annotations.runbook_url` + 预演期用户实收卡片证实）；not-ready 中位（T0'口径）≈356s ≤6min 贴线过；@字段 mobiles 渲染链路在位（assemble-webhook-config.sh 提取 + 模板 AtMobiles，真人 @ 留生产真号验证）|
+| AC-US3-01（Runbook 公网可达） | ✅ | 6 篇 raw URL 从 kind pod wget 全 200。复现：`kubectl run busybox:1.38.0 -- wget -qO- https://raw.githubusercontent.com/jy2382726/k8s-monitor/main/docs/runbook/not-ready.md`（其余 5 篇换文件名）|
+| AC-NFR-01（北极星 MTTD） | ✅（口径修正后） | 送达 15/15=100% + max 430/757/682s 均 < for+10min + 链路自身开销 30-56s ≤60s。口径 = PRD §11.1 注记（T_detect−T0'−for）；oom 受控偏离⑤（§13）；复现 = §13 降级抽验 |
+| AC-NFR-02（收敛/抑制） | ✅ | verify-all AM route 树 + inhibit 检查 PASS + MTTD 批量实证每轮故障恰 1 张卡片（webhook 日志逐轮可数）|
+| AC-NFR-03（自愈） | ✅ | 三场景 verify-all 实际输出 23/0（场景③ wedge 未复现，场景① L1 为等效证据）。复现 = §14 |
+| AC-US2 / US4 / US5 | 前序闭环，不重验 | Phase B/C/D 已用户复现通过（teardown 已还原过）|
+| verify-all 全绿 | ✅ 23/0（22+06 对齐 1 项） | `./deploy/verify/verify-all.sh 2>&1 \| tail -3` 看 Summary |
+| recover.sh 自愈 | ✅（同 AC-NFR-03） | §14 三场景 |
+| Watchdog 心跳连续 | ✅ | verify-all Watchdog 检查项 PASS（含于 23/0）|
+
+### 16.2 生产割接前必修 / 必验（醒目：kind 验收门不含这三项）
+
+| # | 项 | 影响 | 动作 |
+|---|---|---|---|
+| **I-1** | dashboard 节点 Ready 率假绿：`cluster:nodes_ready:ratio` recording rule 计算逻辑缺陷，节点 NotReady 时仪表盘仍可能显示正常 | 生产上 dashboard 与告警不一致，误导处置 | **生产割接前必修**（修 rule expr；Phase E 已登记）|
+| **I-2** | 生产 containerd 是否上报 OOMKilled：kind 的 containerd v2.2.0/cgroupv2 对 memcg OOM 上报 `reason=Error` → `KubeContainerOOMKilled` 匹配 0 series = 死规则 | 真实 OOM 不告警（MTTD=∞） | **生产割接前必验**：注入真实 OOM（或查 `kube_pod_container_status_last_terminated_reason` 含 OOMKilled）确认规则能触发（§13 受控偏离⑤）|
+| blackbox reachability 盲区 | 22+3 规则全 KSM-based，「pod 健康 but 网络不可达」零告警（ArgoCD NodePort wedge 实证）| 服务不可达无告警，只能靠用户投诉 | 受控偏离②，**二期**（候选：ServiceMonitor+ArgoCDDown 轻 / blackbox exporter 重）|
+
+---
+
+## 17. 收尾：Phase F 完成态与 teardown（复现前还原用）
+
+### 17.1 完成态 = MVP 完整态（不清回）
+
+Phase F 验收通过后，集群保持 **MVP 完整态**（3 Application Synced + 26 alerting 规则 +
+Runbook 接线 + oncall CM + Ingress + 23/0），**不做阶段级清回**——这就是产品运行态，
+生产割接从这个态出发。唯一后续 = 合并 main / push origin / 清理 worktree（git 层，不动集群）。
+
+### 17.2 teardown 还原清单（仅当需要把集群还原到 Phase E 末态重新复现时用）
+
+> 原则（plan teardown 节）：新建 `delete` / 修改型 `apply` 前序态或重 apply；凭据 Secret
+> 保留不动。还原顺序：先删管理方（Application），再还原被管资源，最后还原手动资源。
+
+```bash
+# ① Task 11：Ingress（新建型）
+kubectl -n monitoring delete ingress alertmanager
+
+# ② Task 1/2/3/4：ArgoCD 管理层（先删 Application 再删 RBAC；删 Application 不删被管资源）
+kubectl -n argocd delete application monitoring-rules webhook-dingtalk sms-provider
+kubectl -n monitoring delete role,rolebinding argocd-deployer
+
+# ③ Task 6：rule 文件回前序态（runbook_url 注解是 a92d6bd 引入；core-rules 再回退
+#    Task 8 的 +3 条工作负载规则，即 b758564 前）→ re-sync 后由仍在线的 ArgoCD 同步，
+#    或删除 Application 前先 checkout+push 再删
+git checkout a92d6bd~1 -- deploy/components/prometheusrule-core.yaml \
+                             deploy/components/prometheusrule-capacity-controlplane.yaml \
+                             deploy/components/prometheusrule-monitoring-self.yaml
+git commit -m "revert(phase-F): rule 文件回 Task 6 前（teardown）"
+git push /srv/git/k8s-monitor.git HEAD:main
+kubectl -n monitoring apply -f deploy/components/prometheusrule-core.yaml \
+  -f deploy/components/prometheusrule-capacity-controlplane.yaml \
+  -f deploy/components/prometheusrule-monitoring-self.yaml \
+  -f deploy/components/prometheusrule-slo-recording.yaml
+
+# ④ Task 6：webhook 模板回 stub（M14a 前序态）
+git checkout a92d6bd~1 -- deploy/components/webhook-dingtalk/template.tmpl
+git commit -m "revert(phase-F): template.tmpl 回 stub（teardown）"
+#    重建 templates CM + 重启 webhook pod（delete pod，见 §9）：
+#    （templates CM 是手动管理的，按 Phase C 手册重建；此处略——完整复现 Phase C 步骤）
+
+# ⑤ Task 7：oncall CM 去掉 rotation/escalate 两行（保留嵌套原结构，凭据型不删 CM）
+kubectl -n monitoring get cm oncall -o jsonpath='{.data.oncall\.yaml}'   # 先看当前值
+#    编辑：删 rotation / escalate 两行后 apply 回 §10 步骤② 的 heredoc（去掉两行版）
+
+# ⑥ Task 9/10/11：无集群残留（MTTD trap 兜底自清 + recover 场景全还原 + Ingress 已①删）；
+#    仅清宿主侧可选项：git daemon（pkill -f 'git daemon.*base-path=/srv/git'）。
+#    裸仓 /srv/git/k8s-monitor.git 与 deploy/local-git-mirror.sh 可留（M1 前进产物）。
+
+# ⑦ 验证还原到位
+./deploy/verify/verify-all.sh 2>&1 | tail -3    # 期望回 Phase E 基线 22 passed, 0 failed
+```
+
+> ⚠️ 若 teardown 后还要重新复现 Phase F：本手册 §0.2 开始态即此态（Application 0、
+> 27 规则、22/0），从 §1 重新走。git 层的 Phase F commit 不回退（保留历史，靠上面的
+> checkout 单文件回退 + 重新复现时再 checkout 最新版推进）。
 
 ---
 
@@ -738,6 +1011,6 @@ verify-all **实际输出**（grep `[FAIL]` / `Summary`），不能信 recover.s
 | 6 | `docs/runbook/` 7 文件 + 3 rule 文件 23 条注解 + template.tmpl 渲染 + `assert-runbook-url.sh` | `fae34c8` / `a92d6bd`（origin 已推） |
 | 7 | `docs/oncall-手册.md` + oncall CM 扩展（手动，不入 Git） | `17da895` |
 | 8 | verify-all.sh +17 名清单检查 + core-rules +3 条工作负载规则 | `b758564` |
-| 9 | `deploy/verify/measure-mttd-batch.sh` + inject-fault.sh oom 修复 | `3baf5cc` |
-
-（Task 9 长跑结果 / Task 10 / Task 11 产物待补。）
+| 9 | `deploy/verify/measure-mttd-batch.sh` + inject-fault.sh oom 修复；T_detect 污染修复（MIN_WAIT）；MTTD 数据 `docs/phase-manuals/phase-F-MTTD-数据.md` | `3baf5cc` / `8aa6796` / `30b2282` |
+| 10 | 无文件改动、无集群残留（recover 三场景纯验证） | — |
+| 11 | `deploy/components/m12-ingress-am-argocd.yaml` + `deploy/verify/assert-m12-ingress.sh` | `dab4bcd` |

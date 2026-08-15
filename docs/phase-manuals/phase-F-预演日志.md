@@ -203,3 +203,25 @@ git push /srv/git/k8s-monitor.git HEAD:main
 **git 状态**：worktree 领先 origin/main（origin=a92d6bd Runbook 例外 push；本地含全部 F 提交）。裸仓 main=worktree HEAD（ArgoCD 视图一致）。**待用户复现通过后**：合并 main + 统一 push origin（Phase D/E 惯例）。
 
 **预演成功 ≠ 阶段完成**。下一步：提示词④（手册定稿）→ 提示词⑤（teardown 还原 + 用户照手册复现）。阶段完成 = 用户复现通过。
+
+---
+
+## 闭环④ teardown 执行记录（2026-08-15，用户选方案 B）
+
+用户决策：**方案 B（teardown 后全量复现）**。照定稿手册 §17.2 执行：
+
+| 步 | 动作 | 结果 |
+|---|---|---|
+| ① | `kubectl -n monitoring delete ingress alertmanager` | ✓（grafana Ingress 为 Phase E 产物保留） |
+| ② | 删 3 Application + `role,rolebinding argocd-deployer` | ✓ Application 清空 / RBAC 清零 |
+| ③ | `git checkout a92d6bd~1 -- prometheusrule-{core,capacity,monitoring-self}.yaml`（实测该 checkout 同时回退 Task 6 注解 23 条 + Task 8 三条工作负载规则，无需两步）+ commit `5f769ce` + re-sync + 手 apply 4 个 rule | ✓ tracking 注解消失 / runbook_url=0 / 规则回 **27 条**（23 alerting + 4 recording） |
+| ④ | `git checkout a92d6bd~1 -- template.tmpl`（commit `ec02579`）+ `create cm webhook-dingtalk-templates --from-file … --dry-run | apply` + **delete pod**（非 rollout restart） | ✓ webhook pod 10s 重建 Ready，CM 回 stub 版（runbook.example.com） |
+| ⑤ | oncall CM patch 去 rotation/escalate 两行 | ✓ 嵌套结构保留 + `assemble-webhook-config.sh` 回归 OK（顺带重建 webhook-dingtalk-config Secret = Phase C 态） |
+| 补 | **sms-provider-noop Deployment+Service 残留**（删 Application 不删被管资源，手册 §17.2 已预告）→ 补 delete | ✓ 复验清零 |
+| ⑦ | start-state diff：pod/RS 噪声为存档粒度差（存档只列 deploy/sts 级），真残留仅 sms-provider（已补删）；F 版 verify-all = **22/1**（FAIL=06 §3.11.3，**预期 RED**：3 条工作负载规则已回退，检查项正确检出）；**F 前版本（`git show 9f791cd:verify-all.sh | bash`）= 22 passed / 0 failed** ✓ | 集群回 **Phase E 末态** |
+
+### teardown 附注（复现时须知）
+
+- **git 层不回退**：teardown 的 rule/template 回退是**新 commit**（`5f769ce`/`ec02579`，正向历史），复现 Task 6/8 时用户须 `git checkout <F-commit> -- <file>` 恢复 F 版文件再操作。恢复指针：rule 注解+3 条 = `b758564`，template.tmpl = `a92d6bd`。
+- **git daemon 已确认存活**（teardown 前 9418 LISTEN），用户复现 Task 0 直接 `./deploy/local-git-mirror.sh` 重跑即幂等。
+- **F 版 verify-all 的 06 对齐项在本态显示 FAIL 是预期**（检查项在、规则已还原）——用户复现走到 Task 8 时会 GREEN，勿在开始态试图"修"它。

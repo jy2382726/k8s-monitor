@@ -179,3 +179,27 @@ git push /srv/git/k8s-monitor.git HEAD:main
 - **alertmanager.local**：新建 Ingress（whitelist 10/8+172.16/12+192.168/16）→ 200；进 controller pod 核实 nginx.conf 的 allow/deny 生效（本地源 IP 落 172.20.0.0/16 命中 allow，无 403）。
 - **改的资源**（teardown 用）：新建 Ingress `alertmanager`（monitoring ns，delete 即还原）；argocd 侧无新建。
 - plan v1.2 应补记：Task 11 的 NodePort 假设不成立（hostPort 模式）+ argocd 不重建偏离。（见下 commit）
+
+---
+
+## 收尾：Phase F agent 预演验收门判定（2026-08-15）
+
+最终 sweep 实测：verify-all **23/0**；monitoring-rules / webhook-dingtalk / sms-provider 三 app **Synced/Healthy**；alertmanager.local + argocd.local **200**；runbook raw URL **200**。
+
+| AC | 判定 | 证据 |
+|---|---|---|
+| AC-US1-01 | ✅ | 卡片含真公网 runbook_url（template.tmpl 渲染 + 预演期用户实收带处置手册卡片——用户主动来问「这是测试吗」即送达实证）；not-ready 重建中位 426s（T0'口径 ≈356s ≤6min 贴线过）；@字段渲染链路在位（assemble→config mobiles→模板 AtMobiles），真人 @ 留生产真号 |
+| AC-US3-01 | ✅ | 6 篇 raw URL 从 kind pod wget 全 200（公网匿名，不依赖 Grafana）|
+| AC-NFR-01 北极星 | ✅ | 送达 **15/15=100%**（硬门）；max 430/757/682 均 < for+10min；链路自身开销 30-56s ≤60s（口径修正=T_detect−T0'−for，PRD §11.1 注记，用户决策）；oom 受控偏离⑤ |
+| AC-NFR-02 | ✅ | verify-all AM route 树+inhibit 项 PASS；MTTD 批量 15 轮每轮恰 1 张卡片（webhook 日志逐轮可数）|
+| AC-NFR-03 | ✅ | recover 三场景各 verify-all 实际输出 23/0（场景③ wedge 未复现，场景① L1 真实走通为等效证据）|
+| AC-US2/US4/US5 | 不重验 | 前序 B/D 已闭环 |
+| verify-all | ✅ 23/0 | 22（Phase E）+1（06 §3.11.3 对齐项）|
+
+**交付物**（预演三件全齐）：① 部署跑通验收门（上表）；② 操作手册草稿 `phase-F-操作手册-草稿.md`（1016 行，§0-17 + 验收门 + teardown 还原清单）；③ 本预演日志（每 Task 落盘，脱敏）。
+
+**遗留清单**（不阻塞 MVP done，阻断生产可用）：**I-1** dashboard 节点 Ready 率假绿（必修）；**I-2** 生产 containerd OOMKilled 上报必验（kind 死规则）；blackbox reachability 盲区（二期）；C 类杂项（measure-mttd.sh 内残留 KubePodPending auto-detect 映射，批量脚本显式传名绕开无功能影响）。
+
+**git 状态**：worktree 领先 origin/main（origin=a92d6bd Runbook 例外 push；本地含全部 F 提交）。裸仓 main=worktree HEAD（ArgoCD 视图一致）。**待用户复现通过后**：合并 main + 统一 push origin（Phase D/E 惯例）。
+
+**预演成功 ≠ 阶段完成**。下一步：提示词④（手册定稿）→ 提示词⑤（teardown 还原 + 用户照手册复现）。阶段完成 = 用户复现通过。

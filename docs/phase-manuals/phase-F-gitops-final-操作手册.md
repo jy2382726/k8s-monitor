@@ -31,7 +31,7 @@
 | 项 | 期望值 |
 |---|---|
 | 集群 | 3 节点 Ready（control-plane + 2 worker），v1.31.14 |
-| verify-all | **22 PASS / 0 FAIL**（Phase E 基线） |
+| verify-all | **22 PASS / 1 FAIL**（唯一 FAIL = 06 §3.11.3 预期 RED，F 版脚本在开始态的必然结果，见 §1.3；纯净基线验法亦见 §1.3） |
 | helm release | `kube-prometheus-stack` chart **87.2.1**（monitoring ns） |
 | PrometheusRule | **4 个，全手 apply**（core / capacity-controlplane / monitoring-self / slo-recording） |
 | ArgoCD Application | **0 个**（ArgoCD 平台在，pod 全 Running，但未管理任何资源） |
@@ -76,21 +76,36 @@ kubectl -n monitoring get cm oncall
 kubectl get nodes                                            # 3 节点 Ready
 kubectl get prometheusrules -n monitoring                    # 恰好 4 个（见 §0.2）
 kubectl -n argocd get application                            # No resources found
-./deploy/verify/verify-all.sh 2>&1 | tail -5                 # Summary: 22 passed, 0 failed
+./deploy/verify/verify-all.sh 2>&1 | tail -5                 # Summary: 22 passed, 1 failed（预期，见下）
 ```
 
-> ⚠️ **预演踩坑（必读）**：预演首跑 verify-all = **21 PASS / 1 FAIL**（FAIL =
-> `ArgoCD reachable on NodePort 30080`，curl timeout http_code=000）。根因是挂机后 worker
-> 深度 wedge（argocd-server 等重启后 NodePort 不可达）。**且 `recover.sh` 自报「全绿无需恢复」
+> ⚠️ **开始态的 22/1 是预期 RED，不是故障**：你 checkout 的 verify-all 已含 Phase F 的
+> 「06 §3.11.3 核心告警规则清单（17 名）」检查项（Task 8 加，`b758564`），而开始态的 3 条
+> 工作负载规则尚未部署 → 该项必 FAIL。**勿试图"修"它**——走到 Task 8 补齐规则后自然 GREEN。
+> 唯一 FAIL 项必须是 `06 §3.11.3`；若还出现**其他** FAIL（尤其 `ArgoCD reachable on
+> NodePort 30080`），才是真故障，按下方踩坑段处理。要验纯净 Phase E 基线可跑 F 前版本：
+>
+> ```bash
+> git show 9f791cd:deploy/verify/verify-all.sh | bash 2>&1 | grep -E '\[FAIL\]|Summary'
+> # 期望 Summary: 22 passed, 0 failed
+> ```
+
+> ⚠️ **预演踩坑（必读）**：预演首跑 verify-all 真故障一例 = `ArgoCD reachable on
+> NodePort 30080` FAIL（curl timeout http_code=000）。根因是挂机后 worker 深度 wedge
+> （argocd-server 等重启后 NodePort 不可达）。**且 `recover.sh` 自报「全绿无需恢复」
 > 不可信**——`verify-all.sh` 的 `check()` 只计数、末尾无 `exit` 语句，永远 exit 0，recover.sh
-> 靠 exit code 判健康就会误判。**修法（实测有效）**：
+> 靠 exit code 判健康就会误判（复现实测：recover 会把开始态的 06 §3.11.3 预期 RED 也当故障
+> 去 L1/L2 修一轮并误报「未果」——预期 RED 段直接无视）。**修法（实测有效）**：
 >
 > ```bash
 > kubectl -n kube-system rollout restart ds kindnet kube-proxy   # 重建 worker iptables
-> # 等 ~30s 后 ArgoCD NodePort 立即恢复，重跑 verify-all 至 22/0
+> # 等 ~30s 后 ArgoCD NodePort 立即恢复，重跑 verify-all 至 22/1（唯一 FAIL = 06 §3.11.3）
 > ```
 >
-> 判断健康的唯一标准 = verify-all 输出里 grep `[FAIL]` / `Summary` 行的**实际内容**。
+> 判断健康的唯一标准 = verify-all 输出里 grep `[FAIL]` / `Summary` 行的**实际内容**，
+> 且要区分「预期 RED（06 §3.11.3）」与「真故障（其余项）」。另：recover 若 L2 重启过
+> metrics-server，紧跟着跑 `kubectl top` 类检查会撞瞬时 FAIL（metrics-server 重新 scrape
+> 需 1-2min），等 2min 重跑即恢复（复现实测）。
 
 ### 1.4 start-state 存档（复现可跳过，排障 diff 用）
 
@@ -1000,8 +1015,10 @@ kubectl -n monitoring get cm oncall -o jsonpath='{.data.oncall\.yaml}'   # 先�
 ```
 
 > ⚠️ 若 teardown 后还要重新复现 Phase F：本手册 §0.2 开始态即此态（Application 0、
-> 27 规则、22/0），从 §1 重新走。git 层的 Phase F commit 不回退（保留历史，靠上面的
-> checkout 单文件回退 + 重新复现时再 checkout 最新版推进）。
+> 27 规则、F 版 verify-all 显示 22/1 预期 RED），从 §1 重新走。git 层的 Phase F commit
+> 不回退（保留历史，靠上面的 checkout 单文件回退 + **重新复现时先 checkout 回 F 版**：
+> 3 个 rule 文件 `git checkout b758564 -- <files>`、template.tmpl `git checkout a92d6bd --
+> deploy/components/webhook-dingtalk/template.tmpl`，再按各 Task 步骤走）。
 
 ---
 

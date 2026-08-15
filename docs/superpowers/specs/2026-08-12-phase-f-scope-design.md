@@ -156,6 +156,7 @@ agent 预演技术门 = **9 AC 全过**：
 | 2 | **#24 reachability 盲区** | 已知 limitation 非 bug；F 不覆盖网络路径故障；延后 F 后（blackbox 二期） | Phase E 实测：ArgoCD NodePort wedge 期间零告警/dashboard 全绿 |
 | 3 | **F 终态不清回** | 集群留 MVP 完整态 | F 是 MVP done 最终门 |
 | 4 | **kind→github.com 出网（已确认触发，D-6 走本地裸仓）** | ArgoCD 源 = 本地裸仓镜像（`http://172.20.0.1:<port>/k8s-monitor.git`，D-6 实测三步全通）；**弱化「真公网 Git」语义**（Runbook 仍走 github raw 真公网，仅 ArgoCD 源本地化） | github.com 主站 TLS 超时（raw 子域通）；代理路径（Clash allow-lan）撞 IPv6-only 绑定 + 防火墙兔子洞，弃 |
+| 5 | **oom MTTD kind 不可触发（预演发现，用户决策 2026-08-14）** | `KubeContainerOOMKilled` 在 kind 是死规则——containerd v2.2.0/cgroupv2 对 memcg OOM 上报 `reason=Error` 非 `OOMKilled`（全集群 KSM 零 OOMKilled series）→ 真实 OOM 也不触发。MTTD 全量只跑 3 类×5（not-ready/crashloop/pod-pending），oom 改验「规则在位 + 评估无错」（同偏离① control-plane 性质）；**I-2 生产割接前必验**：生产 containerd 是否正确上报 OOMKilled | 预演 Task 9 smoke 实证（crictl inspect + KSM 查询）；AskUserQuestion 用户选「比照 control-plane 受控偏离」；不动 06 expr（生产基线，环境差异非规则错） |
 
 ---
 
